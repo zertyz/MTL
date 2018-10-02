@@ -1,5 +1,5 @@
-#ifndef HASHTABLESPIKES_TIMEMEASUREMENTS_H
-#define HASHTABLESPIKES_TIMEMEASUREMENTS_H
+#ifndef MUTUA_CPPUTILS_TIMEMEASUREMENTS_H
+#define MUTUA_CPPUTILS_TIMEMEASUREMENTS_H
 
 #include <time.h>
 #include <sys/time.h>
@@ -14,7 +14,7 @@
  * None of these functions are reentrant.
  *
 */
-namespace mutua::utils::TimeMeasurements {
+namespace mutua::cpputils::TimeMeasurements {
 
     static inline unsigned long long getRealTimeMS();
     static inline unsigned long long getRealTimeUS();
@@ -26,7 +26,7 @@ namespace mutua::utils::TimeMeasurements {
 
 
 // inlined functions
-using namespace mutua::utils;
+using namespace mutua::cpputils;
 
 static struct timeval timeval_now;
 static struct timespec timespec_now;
@@ -56,4 +56,4 @@ static inline unsigned long long TimeMeasurements::getMonotonicRealTimeNS() {
     return (timespec_now.tv_sec*1000000000ll) + timespec_now.tv_nsec;
 }
 
-#endif //HASHTABLESPIKES_TIMEMEASUREMENTS_H
+#endif //MUTUA_CPPUTILS_TIMEMEASUREMENTS_H

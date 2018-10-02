@@ -9,7 +9,7 @@
 using namespace std;
 
 #include "../../cpp/TimeMeasurements.h"
-using namespace mutua::utils;
+using namespace mutua::cpputils;
 
 
 #define HEAP_TRACE
