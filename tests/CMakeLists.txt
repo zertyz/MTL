@@ -1,11 +1,12 @@
 # test this CMakeLists.txt in a standalone fashion as:
-# 	TYPE="Release"; rm -fr $TYPE; mkdir $TYPE; cd $TYPE; cmake -G Ninja -DCMAKE_BUILD_TYPE=$TYPE ..; cmake --build .; ctest; cd ..; ls -l "$TYPE/CppUtilsSpikes"
+#	TYPE="Release"; rm -fr $TYPE; mkdir $TYPE; cd $TYPE; cmake -G Ninja -DCMAKE_BUILD_TYPE=$TYPE ..; cmake --build .; ctest; cd ..; ls -l "$TYPE/CppUtilsSpikes"
 # The rules here should be used when importing this library into other projects
 
 cmake_minimum_required (VERSION 3.9)
 project                (CppUtilsSpikes VERSION 2018.10.09)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -march=native")	# binary is optimized, but machine dependent
 
 
 file(GLOB_RECURSE SOURCE_FILES  cpp/*.h cpp/*.cpp)
@@ -15,6 +16,7 @@ add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 # imported mutua libraries
 ##########################
 # mutua libraries have the inclues inside the "cpp/" directory
+
 foreach (_referencedLib CppUtils)
 	set(_referencedLib_SOURCES "../../${_referencedLib}/cpp/")
 	message("    --> searching library '${_referencedLib}' in '~/.cmake/packages/${_referencedLib}' with headers in '${_referencedLib_SOURCES}'")
