@@ -69,8 +69,6 @@ int main() {
     }
     DUMP_EXCEPTION(std::overflow_error("My Forced Exception"), "Just a dump of a created Exception, in order for us to see the quality of the debugging output");
 
-    return 0;
-
     cout << endl << endl;
     cout << "Memory Management Costs:" << endl;
     cout << "======================= " << endl << endl;
