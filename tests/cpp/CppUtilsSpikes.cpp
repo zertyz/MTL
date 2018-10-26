@@ -8,54 +8,19 @@
 #include <mutex>
 using namespace std;
 
+#include "../../cpp/MutuaTestMacros.h"
 #include "../../cpp/TimeMeasurements.h"
 #include "../../cpp/BetterExceptions.h"
 using namespace mutua::cpputils;
-
-
-#define HEAP_TRACE
-
-#include <new>
-
-static size_t                             heap_trace_allocated_bytes            = 0;
-static size_t                             heap_trace_deallocated_bytes          = 0;
-static size_t                             heap_trace_allocated_bytes_baseline   = 0;
-static size_t                             heap_trace_deallocated_bytes_baseline = 0;
-
-void* operator new(std::size_t size) {
-    void* alloc_entry = std::malloc(size);
-    if (!alloc_entry) {
-        throw std::bad_alloc();
-    }
-    heap_trace_allocated_bytes += *(size_t*)(((size_t)alloc_entry)-sizeof(size_t));
-    //std::cout << "(-1) equals " << size << " : " << *(size_t*)(((size_t)alloc_entry)-sizeof(size_t)) << std::endl << std::flush;
-    return alloc_entry;
-}
-
-void operator delete(void* alloc_entry) noexcept {
-    heap_trace_deallocated_bytes += *(size_t*)(((size_t)alloc_entry)-sizeof(size_t));
-    //std::cout << "(-1) : " << *(size_t*)(((size_t)alloc_entry)-sizeof(size_t)) << std::endl << std::flush;
-    std::free(alloc_entry);
-}
-
-void setHeapTraceBaseline() {
-    heap_trace_allocated_bytes_baseline   = heap_trace_allocated_bytes;
-    heap_trace_deallocated_bytes_baseline = heap_trace_deallocated_bytes;
-}
-
-void getHeapTraceInfo(string title) {
-    std::cout << "\t" << title << ":" << std::endl;
-    std::cout << "\t\tAllocations:   " << (heap_trace_allocated_bytes   - heap_trace_allocated_bytes_baseline)   << " bytes" << std::endl;
-    std::cout << "\t\tDeallocations: " << (heap_trace_deallocated_bytes - heap_trace_deallocated_bytes_baseline) << " bytes" << std::endl;
-    std::cout << std::endl << std::flush;
-}
 
 
 int main() {
 
     size_t r = 1;		// used to prevent optimizations to avoid loops
 
-        cout << endl << endl;
+    HEAP_MARK();
+
+    cout << endl << endl;
     cout << "BetterExceptions:" << endl;
     cout << "================ " << endl << endl;
 
@@ -147,7 +112,9 @@ int main() {
         cout << "Copied Access timings:\t\t " << (copiedFinish - copiedStart) << "µs" << endl << flush;
     }
 
-    cerr << "Final r: " << r << endl;
-    getHeapTraceInfo("Program allocation totals");
+    cerr << "Final r: " << r << endl << endl << flush;
+
+    HEAP_TRACE("Program allocation totals", cout <<);
+
     return EXIT_SUCCESS;
 }
