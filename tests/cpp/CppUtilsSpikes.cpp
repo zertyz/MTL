@@ -62,7 +62,7 @@ int main() {
         unsigned long long lockUnlockStart = TimeMeasurements::getMonotonicRealTimeUS();
         for (int i = 0; i < 1'000'000'000; i++) {
             opGuard.lock();
-	    r += r;
+	    	r += r;
             opGuard.unlock();
         }
         unsigned long long lockUnlockFinish = TimeMeasurements::getMonotonicRealTimeUS();
@@ -71,7 +71,7 @@ int main() {
         unsigned long long raiiStart = TimeMeasurements::getMonotonicRealTimeUS();
         for (int i = 0; i < 1'000'000'000; i++) {
             std::lock_guard<std::mutex> lock(opGuard);
-	    r += r;
+	    	r += r;
         }
         unsigned long long raiiFinish = TimeMeasurements::getMonotonicRealTimeUS();
         cout << "RAII locking timings:\t\t " << (raiiFinish - raiiStart) << "µs" << endl << flush;
