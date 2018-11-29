@@ -6,7 +6,7 @@ cmake_minimum_required (VERSION 3.9)
 project                (CppUtilsSpikes VERSION 2018.10.09)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -march=native")	# binary is optimized, but machine dependent
+set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -march=native -mcpu=native -mtune=native")	# binary is optimized, but machine dependent
 
 
 file(GLOB_RECURSE SOURCE_FILES  cpp/*.h cpp/*.cpp)
