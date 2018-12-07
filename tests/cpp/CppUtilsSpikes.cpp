@@ -70,7 +70,7 @@ int main() {
 
         unsigned long long raiiStart = TimeMeasurements::getMonotonicRealTimeUS();
         for (int i = 0; i < 1'000'000'000; i++) {
-            std::lock_guard<std::mutex> lock(opGuard);
+            std::scoped_lock<std::mutex> lock(opGuard);
 	    	r += r;
         }
         unsigned long long raiiFinish = TimeMeasurements::getMonotonicRealTimeUS();
