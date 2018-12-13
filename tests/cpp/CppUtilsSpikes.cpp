@@ -11,14 +11,31 @@ using namespace std;
 #include "../../cpp/MutuaTestMacros.h"
 #include "../../cpp/TimeMeasurements.h"
 #include "../../cpp/BetterExceptions.h"
+#include "../../cpp/ConstExprUtils.h"
 using namespace mutua::cpputils;
 
 
+//constexpr array<char, 262000/*17*40960000*/> constexprHugeArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 262000/*17*40960000*/>('a', 'z');
+constexpr array<char, 17*40960000> constexprHugeArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 17*40960000>('a', 'z');
 int main() {
 
     size_t r = 1;		// used to prevent optimizations to avoid loops
 
     HEAP_MARK();
+
+    cout << endl << endl;
+    cout << "ConstExprUtils:" << endl;
+    cout << "============== " << endl << endl;
+    constexpr array<char, 64> constexprArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 64>('a', 'z');
+    string staticallyGeneratedRandomString(constexprArray.begin(), constexprArray.end());
+    cout << "ConstExpr random String: '" << staticallyGeneratedRandomString << "'" << endl << flush;
+    //string staticallyGeneratedHugeRandomString(constexprHugeArray.begin(), constexprArray.end());
+    //cout << "constexpr huge String: '" << staticallyGeneratedHugeRandomString << "'" << endl << flush;
+    cout << "constexpr huge String: '" << flush;
+    for (unsigned i=0; i<constexprHugeArray.size(); i++) {
+        cout << constexprHugeArray[i];
+    }
+    cout << "'" << endl << flush;
 
     cout << endl << endl;
     cout << "BetterExceptions:" << endl;

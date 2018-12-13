@@ -5,8 +5,8 @@
 #include <sys/time.h>
 
 /** <pre>
- * TimeMeasurements.cpp
- * ====================
+ * TimeMeasurements.h
+ * ==================
  * created by luiz, Sep 19, 2015
  *
  * Real Time measurement functions -- milliseconds and microseconds.
