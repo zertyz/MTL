@@ -16,8 +16,11 @@ using namespace mutua::cpputils;
 
 
 // from ConstExprUtils:
-constexpr std::array<std::array<char, 17>, 1024'000> constexprRandom2DCharArray = Mutua::CppUtils::ConstExprUtils::generateRandomChar2DArray<1024'000, 17>('a', 'z');
-constexpr array<string_view, 1024'000>               constexprRandomStringArray = Mutua::CppUtils::ConstExprUtils::generateStringArrayFromCharArray<1024'000, 17>(constexprRandom2DCharArray);
+//#define len 1024'000	// the maximum clang can do without swapping in my 8G laptop
+#define len 64'000	// the maximum clang can in a small 512m Raspberry Pi, with a little backing dev zram swap
+constexpr std::array<std::array<char, 17>, len> constexprRandom2DCharArray = Mutua::CppUtils::ConstExprUtils::generateRandomChar2DArray<len, 17>('a', 'z');
+constexpr array<string_view, len>               constexprRandomStringArray = Mutua::CppUtils::ConstExprUtils::generateStringArrayFromCharArray<len, 17>(constexprRandom2DCharArray);
+#undef len
 
 int main() {
 
@@ -31,7 +34,7 @@ int main() {
     constexpr array<char, 64> constexprArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 64>('a', 'z');
     string staticallyGeneratedRandomString(constexprArray.begin(), constexprArray.end());
     cout << "ConstExpr random String contents with dynamic string object creation: '" << staticallyGeneratedRandomString << "'" << endl << flush;
-    cout << "constexpr huge Random String Array: {" << flush;
+    cout << "constexpr huge Random String Array (" << constexprRandomStringArray.size() << " elements): {" << flush;
     for (unsigned i=0; i<constexprRandomStringArray.size(); i++) {
 		cout << "'" << constexprRandomStringArray[i] << "', ";
     }
