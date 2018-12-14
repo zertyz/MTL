@@ -15,8 +15,10 @@ using namespace std;
 using namespace mutua::cpputils;
 
 
-//constexpr array<char, 262000/*17*40960000*/> constexprHugeArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 262000/*17*40960000*/>('a', 'z');
-constexpr array<char, 17*40960000> constexprHugeArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 17*40960000>('a', 'z');
+// from ConstExprUtils:
+constexpr std::array<std::array<char, 17>, 1024'000> constexprRandom2DCharArray = Mutua::CppUtils::ConstExprUtils::generateRandomChar2DArray<1024'000, 17>('a', 'z');
+constexpr array<string_view, 1024'000>               constexprRandomStringArray = Mutua::CppUtils::ConstExprUtils::generateStringArrayFromCharArray<1024'000, 17>(constexprRandom2DCharArray);
+
 int main() {
 
     size_t r = 1;		// used to prevent optimizations to avoid loops
@@ -28,14 +30,12 @@ int main() {
     cout << "============== " << endl << endl;
     constexpr array<char, 64> constexprArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 64>('a', 'z');
     string staticallyGeneratedRandomString(constexprArray.begin(), constexprArray.end());
-    cout << "ConstExpr random String: '" << staticallyGeneratedRandomString << "'" << endl << flush;
-    //string staticallyGeneratedHugeRandomString(constexprHugeArray.begin(), constexprArray.end());
-    //cout << "constexpr huge String: '" << staticallyGeneratedHugeRandomString << "'" << endl << flush;
-    cout << "constexpr huge String: '" << flush;
-    for (unsigned i=0; i<constexprHugeArray.size(); i++) {
-        cout << constexprHugeArray[i];
+    cout << "ConstExpr random String contents with dynamic string object creation: '" << staticallyGeneratedRandomString << "'" << endl << flush;
+    cout << "constexpr huge Random String Array: {" << flush;
+    for (unsigned i=0; i<constexprRandomStringArray.size(); i++) {
+		cout << "'" << constexprRandomStringArray[i] << "', ";
     }
-    cout << "'" << endl << flush;
+    cout << "}" << endl << flush;
 
     cout << endl << endl;
     cout << "BetterExceptions:" << endl;

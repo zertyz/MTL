@@ -8,6 +8,10 @@ project                (CppUtilsSpikes VERSION 2018.10.09)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -march=native -mcpu=native -mtune=native")	# binary is optimized, but machine dependent
 
+# increase the limit for constexpr loops
+ set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -fconstexpr-steps=208896000")		# for clang 12*17*1024000 for constexpr 1M, 16 char keys	-- requires 5,6G RAM
+#set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -fconstexpr-loop-limit=17409000")	# for gcc, 1024000*17+1000 for constexpr 1M, 16 char keys	-- requires more than 7G of RAM
+
 
 file(GLOB_RECURSE SOURCE_FILES  cpp/*.h cpp/*.cpp)
 message("Building executable './${CMAKE_BUILD_TYPE}/${PROJECT_NAME}' with: ${SOURCE_FILES}")

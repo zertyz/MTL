@@ -1,6 +1,6 @@
 # Usage:
 #	TYPE="Debug";   rm -fr $TYPE; mkdir $TYPE; cd $TYPE; cmake -G Ninja -DCMAKE_BUILD_TYPE=$TYPE ..; cmake --build .; ctest; cd ..; ls -l "$TYPE/tests/CppUtilsSpikes"
-#	TYPE="Release"; rm -fr $TYPE; mkdir $TYPE; cd $TYPE; cmake -G Ninja -DCMAKE_BUILD_TYPE=$TYPE ..; cmake --build .; ctest; cd ..; ls -l "$TYPE/tests/CppUtilsSpikes"
+#	TYPE="Release"; rm -fr $TYPE; mkdir $TYPE; cd $TYPE; CXX=/usr/bin/clang++ cmake -G Ninja -DCMAKE_BUILD_TYPE=$TYPE ..; cmake --build .; ctest; cd ..; ls -l "$TYPE/tests/CppUtilsSpikes"
 
 cmake_minimum_required (VERSION 3.9)
 project                (CppUtils VERSION 2018.10.09)
