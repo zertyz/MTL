@@ -17,9 +17,9 @@ using namespace mutua::cpputils;
 
 // from ConstExprUtils:
 //#define len 1024'000	// the maximum clang can do without swapping in my 8G laptop
-#define len 64'000	// the maximum clang can in a small 512m Raspberry Pi, with a little backing dev zram swap
-constexpr std::array<std::array<char, 17>, len> constexprRandom2DCharArray = Mutua::CppUtils::ConstExprUtils::generateRandomChar2DArray<len, 17>('a', 'z');
-constexpr array<string_view, len>               constexprRandomStringArray = Mutua::CppUtils::ConstExprUtils::generateStringArrayFromCharArray<len, 17>(constexprRandom2DCharArray);
+#define len 64'000	// the maximum clang can do in a small 512m Raspberry Pi, with a little backing dev zram swap
+constexpr std::array<std::array<char, 17>, len> constexprRandom2DCharArray = ConstExprUtils::generateRandomChar2DArray<len, 17>('a', 'z');
+constexpr array<string_view, len>               constexprRandomStringArray = ConstExprUtils::generateStringArrayFromCharArray<len, 17>(constexprRandom2DCharArray);
 #undef len
 
 int main() {

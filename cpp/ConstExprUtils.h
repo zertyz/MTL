@@ -3,7 +3,7 @@
 
 #include <sstream>
 
-namespace Mutua::CppUtils {
+namespace mutua::cpputils {
 
 	/** <pre>
 	 * ConstExprUtils.h
