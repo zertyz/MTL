@@ -2,8 +2,8 @@
 #define MUTUA_TESTUTILS_MUTUATESTMACROS_H_
 
 /** <pre>
- * MutuaTestMacros.cpp
- * ===================
+ * MutuaTestMacros.h
+ * =================
  * created by luiz, Oct 24, 2018
  *
  * Macros ease Unit Tests with Boost Test Framework.
