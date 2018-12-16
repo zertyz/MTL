@@ -31,7 +31,7 @@ int main() {
     cout << endl << endl;
     cout << "ConstExprUtils:" << endl;
     cout << "============== " << endl << endl;
-    constexpr array<char, 64> constexprArray = Mutua::CppUtils::ConstExprUtils::generateRandomArray<char, 64>('a', 'z');
+    constexpr array<char, 64> constexprArray = mutua::cpputils::ConstExprUtils::generateRandomArray<char, 64>('a', 'z');
     string staticallyGeneratedRandomString(constexprArray.begin(), constexprArray.end());
     cout << "ConstExpr random String contents with dynamic string object creation: '" << staticallyGeneratedRandomString << "'" << endl << flush;
     cout << "constexpr huge Random String Array (" << constexprRandomStringArray.size() << " elements): {" << flush;
