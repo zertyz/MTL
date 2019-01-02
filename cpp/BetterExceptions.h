@@ -39,8 +39,11 @@
 }
 
 // double expansion trick macros to give us __LINE__ as a string
-#define S(x) #x
-#define S_(x) S(x)
-#define THROW_EXCEPTION(_ExceptionType, _msg) throw _ExceptionType(_msg + "', thrown at '" __FILE__ ":" S_(__LINE__) " -- "s + std::string(__PRETTY_FUNCTION__))
+#define _TO_STR(x) #x
+#define TO_STR(x) _TO_STR(x)
+#define THROW_EXCEPTION(_ExceptionType, _msg) throw _ExceptionType(_msg + "', thrown at '" __FILE__ ":" TO_STR(__LINE__) " -- "s + std::string(__PRETTY_FUNCTION__))
+// leave those TO_STR macros as a side effect
+//#undef _TO_STR
+//#undef TO_STR
 
 #endif //MUTUA_CPPUTILS_BETTEREXCEPTIONS_H
