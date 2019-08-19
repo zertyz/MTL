@@ -32,8 +32,6 @@ namespace mutua::MTL::stack {
         _BackingArrayElementType* backingArray;
         atomic<unsigned>&         stackHead;
 
-        mutex m;
-
 
         /** initiates a stack manipulation object, receiving as argument pointers to the 'backingArray'
          *  and the atomic 'stackHead' pointer.
@@ -45,7 +43,7 @@ namespace mutua::MTL::stack {
             , stackHead    (stackHead) {
 
             // start with an empty stack
-            stackHead.store(-1, memory_order_relaxed);
+            stackHead.store(-1, memory_order_release);
         }
 
         /** pushes into the stack one of the elements of the 'backingArray',
@@ -54,11 +52,10 @@ namespace mutua::MTL::stack {
 
             _BackingArrayElementType* elementSlot = &(backingArray[elementId]);
 
-            elementSlot->next = stackHead.load(std::memory_order_relaxed);
-
-            while(!stackHead.compare_exchange_weak(elementSlot->next, elementId,
-                                                   std::memory_order_release,
-                                                   std::memory_order_relaxed));
+            elementSlot->next = stackHead.load(memory_order_relaxed);
+            while(!stackHead.compare_exchange_strong(elementSlot->next, elementId,
+                                                     memory_order_release,
+                                                     memory_order_relaxed));
 
             return elementSlot;
 
@@ -66,27 +63,27 @@ namespace mutua::MTL::stack {
 
         /** pops the head of the stack -- returning a pointer to one of the elements of the 'backingArray'.
          *  Returns 'nullptr' if the stack is empty */
-        inline _BackingArrayElementType* pop(unsigned &headId) {
+        inline unsigned pop(_BackingArrayElementType** headSlot) {
 
-            _BackingArrayElementType* headSlot;
-            headId = stackHead.load(memory_order_relaxed);
+            unsigned headId = stackHead.load(memory_order_relaxed);
             do {
                 // is stack empty?
-    			if (unlikely( headId == -1 )) {
-    				return nullptr;
+    			if (headId == -1) {
+                    *headSlot = nullptr;
+    				return -1;
     			}
-                headSlot = &(backingArray[headId]);
-            } while (!stackHead.compare_exchange_weak(headId, headSlot->next,
-			                                          std::memory_order_release,
-			                                          std::memory_order_relaxed));
-            return headSlot;
+                *headSlot = &(backingArray[headId]);
+            } while (!stackHead.compare_exchange_weak(headId, (*headSlot)->next,
+			                                          memory_order_release,
+			                                          memory_order_relaxed));
+            return headId;
         }
 
         /** overload method to be used to pop the head from the stack when one doesn't want to know
          *  what index of the 'backingArray' it is stored at */
         inline _BackingArrayElementType* pop() {
-            unsigned headId;
-            return pop(headId);
+            _BackingArrayElementType* headSlot;
+            return pop(&headSlot);
         }
 
     };
