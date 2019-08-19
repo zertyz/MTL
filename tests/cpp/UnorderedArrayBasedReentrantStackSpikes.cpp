@@ -6,7 +6,7 @@
 
 #include "../../cpp/stack/UnorderedArrayBasedReentrantStack.hpp"
 
-// compile with clang++ -std=c++17 -O3 -march=native -mtune=native -pthread UnorderedArrayBasedReentrantStackSpikes.cpp -o UnorderedArrayBasedReentrantStackSpik
+// compile with (clan)g++ -std=c++17 -O3 -march=native -mtune=native -pthread UnorderedArrayBasedReentrantStackSpikes.cpp -o UnorderedArrayBasedReentrantStackSpikes
 
 #define DOCS "spikes on 'UnorderedArrayBasedReentrantStack'\n" \
              "=============================================\n" \
@@ -173,6 +173,7 @@ int main(void) {
     }
 
     std::cout << "\n\nStaring the multithreaded tests:\n";
+    unsigned long long start = getMonotonicRealTimeNS();
     populateFreeStack();
     std::thread threads[N_THREADS];
 	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
@@ -185,9 +186,12 @@ int main(void) {
     for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
     	threads[_threadNumber].join();
     }
+    unsigned long long finish = getMonotonicRealTimeNS();
+
     dumpStack(freeStack, N_ELEMENTS, "freeStack", false);
     dumpStack(usedStack, 0, "usedStack", false);
 
+    std::cout << "--> Executed in " << ((finish-start) / (unsigned long long)1000'000) << "ms.\n";
 
     return 0;
 }
