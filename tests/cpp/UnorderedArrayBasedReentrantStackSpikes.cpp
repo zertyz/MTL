@@ -21,7 +21,7 @@
 // (disabling compilation optimizations might also help)
 #define N_THREADS      12
 #define BATCH          4096
-#define BACK_AND_FORTH (18264)
+#define BACK_AND_FORTH (654321)
 
 #define N_ELEMENTS     (65535)   // should be >= N_THREADS * BATCH
 
@@ -45,8 +45,8 @@ struct MyStruct {
 };
 template <typename _OriginalStruct>
 struct StackElement {
-    unsigned        next;
-    _OriginalStruct original;
+    alignas(64) atomic<unsigned> next;
+    _OriginalStruct              original;
 };
 typedef StackElement<MyStruct> MyStackElement;
 

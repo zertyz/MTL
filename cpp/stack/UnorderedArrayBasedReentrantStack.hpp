@@ -52,11 +52,13 @@ namespace mutua::MTL::stack {
 
             _BackingArrayElementType* elementSlot = &(backingArray[elementId]);
 
-            elementSlot->next = stackHead.load(memory_order_relaxed);
-            while(!stackHead.compare_exchange_strong(elementSlot->next, elementId,
+            unsigned int next = stackHead.load(memory_order_relaxed);
+            std::atomic_store_explicit(&elementSlot->next, next, std::memory_order_release);
+            while(!stackHead.compare_exchange_weak(next, elementId,
                                                      memory_order_release,
-                                                     memory_order_relaxed));
-
+                                                     memory_order_relaxed)) {
+                std::atomic_store_explicit(&elementSlot->next, next, std::memory_order_release);
+            }
             return elementSlot;
 
         }
@@ -65,6 +67,7 @@ namespace mutua::MTL::stack {
          *  Returns 'nullptr' if the stack is empty */
         inline unsigned pop(_BackingArrayElementType** headSlot) {
 
+            unsigned next;
             unsigned headId = stackHead.load(memory_order_relaxed);
             do {
                 // is stack empty?
@@ -73,7 +76,9 @@ namespace mutua::MTL::stack {
     				return -1;
     			}
                 *headSlot = &(backingArray[headId]);
-            } while (!stackHead.compare_exchange_weak(headId, (*headSlot)->next,
+                next = std::atomic_load_explicit(&((*headSlot)->next), memory_order_relaxed);
+                atomic_thread_fence(memory_order_acquire);
+            } while (!stackHead.compare_exchange_weak(headId, next,
 			                                          memory_order_release,
 			                                          memory_order_relaxed));
             return headId;
