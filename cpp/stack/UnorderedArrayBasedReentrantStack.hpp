@@ -97,7 +97,6 @@ namespace mutua::MTL::stack {
             //     cout << "Error: pushing element #"<<elementId<<" twice ("<<collisions<<" colliisions so far)\n" << flush;
             // }
 
-            elementSlot->next.store(next, memory_order_release);
 
             // while (unlikely (!headGuard.compare_exchange(stackHead, next, elementId)) ) {
             //     elementSlot->next.store(next, memory_order_release);
@@ -108,20 +107,16 @@ namespace mutua::MTL::stack {
             // headGuard.lock();
             while(unlikely (!stackHead.compare_exchange_weak(next, elementId,
                                                              memory_order_release,
-                                                             memory_order_relaxed)) ) {
-                // atomic_thread_fence(std::memory_order_seq_cst);
-                elementSlot->next.store(next, memory_order_release);
-                ////std::this_thread::yield();
-                // collisions += 1;
-            }
+                                                             memory_order_relaxed)) );
             // headGuard.unlock();
 
             // if (unlikely (next == elementId) ) {
             //     cout << "Exception: pushing element #"<<elementId<<" with ->next pointed to itself ("<<collisions<<" collisions so far)\n" << flush;
             // }
 
-            //elementSlot->atomic_flag.clear();
-            elementSlot->mutex.unlock();
+            elementSlot->next = next;
+            elementSlot->atomic_flag.clear(std::memory_order_release);
+            //elementSlot->mutex.unlock();
 
             return elementSlot;
 
@@ -134,7 +129,7 @@ namespace mutua::MTL::stack {
             // atomic<unsigned>*         head = &stackHead;
             _BackingArrayElementType* headSlot;
             unsigned                  headId;
-            unsigned                  next;
+            /*unsigned                  next;*/
 
             // // find 'head': a poppable entry near the top of the stack
             // // (an entry which has a cleared 'atomic_flag')
@@ -171,15 +166,14 @@ namespace mutua::MTL::stack {
                     return -1;
                 }
                 headSlot = &(backingArray[headId]);
-                next = headSlot->next.load(memory_order_relaxed);
 
-            } while (unlikely (!stackHead.compare_exchange_weak(headId, next,
+            } while (unlikely (!stackHead.compare_exchange_weak(headId, headSlot->next,
                                                                 memory_order_release,
                                                                 memory_order_relaxed)) );
 
             // wait until the slot can be acquired -- and lock it
-            //while (likely (!headSlot->atomic_flag.test_and_set(std::memory_order_acquire)) ) ;
-            headSlot->mutex.lock();
+            while (likely (!headSlot->atomic_flag.test_and_set(std::memory_order_acquire)) ) ;
+            //headSlot->mutex.lock();
 
 
             *slot = headSlot;

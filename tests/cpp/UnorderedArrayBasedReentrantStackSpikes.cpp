@@ -40,15 +40,15 @@ static inline unsigned long long getMonotonicRealTimeNS() {
 /////////////
 
 struct MyStruct {
-    std::atomic<double>    n;
-    std::atomic<unsigned>  nSqrt;
+    double    n;
+    unsigned  nSqrt;
 };
 template <typename _OriginalStruct>
 struct StackElement {
-    alignas(64) std::atomic<unsigned> next;
-    _OriginalStruct                   original;
-//    std::atomic_flag                  atomic_flag = ATOMIC_FLAG_INIT;
-    std::mutex                        mutex;
+    alignas(64) unsigned next;
+    _OriginalStruct      original;
+    std::atomic_flag                  atomic_flag = ATOMIC_FLAG_INIT;
+    //std::mutex           mutex;
 };
 typedef StackElement<MyStruct> MyStackElement;
 
@@ -129,8 +129,8 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 // //        std::atomic_thread_fence(std::memory_order_acquire);
 
         myData = &(stackEntry->original);
-        myData->n.store((double)(taskId+poppedId)*(double)(taskId+poppedId), std::memory_order_relaxed);
-        myData->nSqrt.store(taskId+poppedId, std::memory_order_relaxed);
+        myData->n = (double)(taskId+poppedId)*(double)(taskId+poppedId);
+        myData->nSqrt = taskId+poppedId;
 
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
         operationsCount.fetch_add(1);
@@ -165,8 +165,8 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
         myData = &(stackEntry->original);
-        double   n     = myData->n.load(std::memory_order_relaxed);
-        unsigned nSqrt = myData->nSqrt.load(std::memory_order_relaxed);
+        double   n     = myData->n;
+        unsigned nSqrt = myData->nSqrt;
         if (n != (double)nSqrt*(double)nSqrt) {
             errorsCount.fetch_add(1);
             //std::cout << "popped element #" << poppedId << " assert failed: " << n << " != " << (double)nSqrt*(double)nSqrt << ", thread #"<<threadNumber<<", collisions(free,used): "<<freeStack.collisions<<","<<usedStack.collisions<<" so far. continueing anyway...\n" << std::flush;
