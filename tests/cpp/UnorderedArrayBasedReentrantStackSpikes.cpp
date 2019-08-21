@@ -40,15 +40,15 @@ static inline unsigned long long getMonotonicRealTimeNS() {
 /////////////
 
 struct MyStruct {
-    double      n;
-    unsigned    nSqrt;
-    std::mutex  mutex;
+    double                       n;
+    unsigned                     nSqrt;
+    //std::mutex                   mutex;
+    std::atomic_flag             atomic_flag = ATOMIC_FLAG_INIT;
 };
 template <typename _OriginalStruct>
 struct StackElement {
     alignas(64) atomic<unsigned> next;
     _OriginalStruct              original;
-    //std::atomic_flag             atomic_flag = ATOMIC_FLAG_INIT;
 };
 typedef StackElement<MyStruct> MyStackElement;
 
@@ -102,23 +102,23 @@ void niceExit(int n) {
     }
 }
 
-std::atomic<unsigned> r(0);
 std::atomic<unsigned> operationsCount(0);
+std::atomic<unsigned> scaleUpsCount(0);
 std::atomic<unsigned> errorsCount(0);
-void backAndForth(unsigned threadNumber, unsigned taskId) {
+
+inline void push(unsigned& threadNumber, unsigned& taskId, unsigned& i) {
+
     MyStackElement* stackEntry;
     MyStruct* myData;
     unsigned poppedId;
 
-    for (unsigned i=0; i<BATCH; i++) {
-//        std::atomic_thread_fence(std::memory_order_seq_cst);
-        while (unlikely ((poppedId = freeStack.pop(&stackEntry)) == -1) ) {
-            operationsCount.fetch_add(1);
+    while (unlikely ((poppedId = freeStack.pop(&stackEntry)) == -1) ) {
+        errorsCount.fetch_add(1);
 //            std::atomic_thread_fence(std::memory_order_seq_cst);
-            std::cout << "'freeStack' prematurely ran out of elements in iteraction "<<i<<" of "<<BATCH<<", thread #"<<threadNumber<<", "<<freeStack.collisions<<" collisions so far. ABORTING...\n" << std::flush;
-            niceExit(1);
-        }
+        std::cout << "'freeStack' prematurely ran out of elements in iteraction "<<i<<" of "<<BATCH<<", thread #"<<threadNumber<<", "<<freeStack.collisions<<" collisions so far. ABORTING...\n" << std::flush;
+        niceExit(1);
         operationsCount.fetch_add(1);
+    }
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
 
 //         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
@@ -128,15 +128,26 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 //         }
 // //        std::atomic_thread_fence(std::memory_order_acquire);
 
-        myData = &(stackEntry->original);
-        myData->mutex.lock();
-        myData->n = (double)(taskId+poppedId)*(double)(taskId+poppedId);
-        myData->nSqrt = taskId+poppedId;
-        myData->mutex.unlock();
+    myData = &(stackEntry->original);
+
+    // get the lock. if our slot is taken, move to the next one
+    // (instead of a simple spin lock, we process the next one while we wait)
+    while (myData->atomic_flag.test_and_set(std::memory_order_acquire)) {
+        if (i<BATCH) {
+            scaleUpsCount.fetch_add(1);
+            push(threadNumber, taskId, ++i);
+        }
+    }
+
+    myData->n = (double)(taskId+poppedId)*(double)(taskId+poppedId);
+    myData->nSqrt = taskId+poppedId;
+
+    // release the lock
+    myData->atomic_flag.clear(std::memory_order_release);
 
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
-        operationsCount.fetch_add(1);
-        usedStack.push(poppedId);
+    operationsCount.fetch_add(2);   // the pop and the push
+    usedStack.push(poppedId);
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
 
 //         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
@@ -145,17 +156,21 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 //             niceExit(1);
 //         }
 // //        std::atomic_thread_fence(std::memory_order_acquire);
-    }
+}
 
-    for (unsigned i=0; i<BATCH; i++) {
+inline void pop(unsigned& threadNumber, unsigned& taskId, unsigned& i) {
+    MyStackElement* stackEntry;
+    MyStruct* myData;
+    unsigned poppedId;
+
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
-        while (unlikely ((poppedId = usedStack.pop(&stackEntry)) == -1) ) {
-            operationsCount.fetch_add(1);
+    while (unlikely ((poppedId = usedStack.pop(&stackEntry)) == -1) ) {
+        errorsCount.fetch_add(1);
 //            std::atomic_thread_fence(std::memory_order_seq_cst);
-            std::cout << "'usedStack' prematurely ran out of elements in iteraction "<<i<<" of "<<BATCH<<", thread #"<<threadNumber<<", "<<usedStack.collisions<<" collisions so far. ABORTING...\n" << std::flush;
-            niceExit(1);
-        }
+        std::cout << "'usedStack' prematurely ran out of elements in iteraction "<<i<<" of "<<BATCH<<", thread #"<<threadNumber<<", "<<usedStack.collisions<<" collisions so far. ABORTING...\n" << std::flush;
+        niceExit(1);
         operationsCount.fetch_add(1);
+    }
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
 
 //         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
@@ -166,22 +181,34 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 // //        std::atomic_thread_fence(std::memory_order_acquire);
 
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
-        myData = &(stackEntry->original);
-        myData->mutex.lock();
-        double   n     = myData->n;
-        unsigned nSqrt = myData->nSqrt;
-        myData->mutex.unlock();
-        if (n != (double)nSqrt*(double)nSqrt) {
-            errorsCount.fetch_add(1);
-            //std::cout << "popped element #" << poppedId << " assert failed: " << n << " != " << (double)nSqrt*(double)nSqrt << ", thread #"<<threadNumber<<", collisions(free,used): "<<freeStack.collisions<<","<<usedStack.collisions<<" so far. continueing anyway...\n" << std::flush;
-            //niceExit(1);
+    myData = &(stackEntry->original);
+
+    // get the lock. if our slot is taken, move to the next one
+    // (instead of a simple spin lock, we process the next one while we wait)
+    while (myData->atomic_flag.test_and_set(std::memory_order_acquire)) {
+        if (i<BATCH) {
+            scaleUpsCount.fetch_add(1);
+            pop(threadNumber, taskId, ++i);
         }
-        r.fetch_add(n+nSqrt);
+    }
+
+    double   n     = myData->n;
+    unsigned nSqrt = myData->nSqrt;
+
+    // release the lock
+    myData->atomic_flag.clear(std::memory_order_release);
+    //myData->mutex.unlock();
+
+    if (n != (double)nSqrt*(double)nSqrt) {
+        errorsCount.fetch_add(1);
+        //std::cout << "popped element #" << poppedId << " assert failed: " << n << " != " << (double)nSqrt*(double)nSqrt << ", thread #"<<threadNumber<<", collisions(free,used): "<<freeStack.collisions<<","<<usedStack.collisions<<" so far. continueing anyway...\n" << std::flush;
+        //niceExit(1);
+    }
 ////        std::atomic_thread_fence(std::memory_order_seq_cst);
 
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
-        operationsCount.fetch_add(1);
-        freeStack.push(poppedId);
+    operationsCount.fetch_add(2);       // the pop and the push
+    freeStack.push(poppedId);
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
 
 //         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
@@ -190,6 +217,17 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 //             niceExit(1);
 //         }
 // //        std::atomic_thread_fence(std::memory_order_acquire);
+
+}
+
+void backAndForth(unsigned threadNumber, unsigned taskId) {
+
+    for (unsigned i=0; i<BATCH; i++) {
+        push(threadNumber, taskId, i);
+    }
+
+    for (unsigned i=0; i<BATCH; i++) {
+        pop(threadNumber, taskId, i);
     }
 }
 
@@ -242,15 +280,19 @@ int main(void) {
     // statistics
     unsigned lastOperationsCount = 0;
     unsigned deltaOps;
+    unsigned lastScaleUpsCount = 0;
+    unsigned deltaScaleUps;
     unsigned lastErrorsCount = 0;
     unsigned deltaErrs;
     do {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         deltaOps = operationsCount-lastOperationsCount;
         lastOperationsCount += deltaOps;
+        deltaScaleUps = scaleUpsCount-lastScaleUpsCount;
+        lastScaleUpsCount += deltaScaleUps;
         deltaErrs = errorsCount-lastErrorsCount;
         lastErrorsCount += deltaErrs;
-        std::cout << "Performance: " << deltaOps << " \tops/s; \t" << deltaErrs << "   \terr/s   \t(" << lastErrorsCount << " \ttotal)    \r" << std::flush;
+        std::cout << "Performance: " << deltaOps << "  \tops/s  |    \t" << deltaScaleUps << " \tup/s  |    \t" << deltaErrs << "  \terr/s    (" << lastErrorsCount << "  \ttotal)    \r" << std::flush;
     } while ((deltaOps > 0) || (deltaErrs > 0));
 
     for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
@@ -263,7 +305,7 @@ int main(void) {
     dumpStack(freeStack, N_ELEMENTS, "freeStack", false);
     dumpStack(usedStack, 0, "usedStack", false);
 
-    std::cout << "--> Executed in " << ((finish-start) / (unsigned long long)1000'000) << "ms (r=="<<r<<").\n";
+    std::cout << "--> Executed in " << ((finish-start) / (unsigned long long)1000'000) << "ms ("<<operationsCount<<" operations, "<<scaleUpsCount<<" scale-ups, "<<errorsCount<<").\n";
 
     return 0;
 }
