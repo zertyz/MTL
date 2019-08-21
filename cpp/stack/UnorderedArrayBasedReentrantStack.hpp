@@ -10,6 +10,42 @@ using namespace std;
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
+#include <xmmintrin.h>
+namespace mutua::MTL {
+    struct SpinMutex {
+        std::atomic_flag flag = ATOMIC_FLAG_INIT;
+        std::mutex m;
+        inline void lock() {
+            // acquire lock
+            while (flag.test_and_set(std::memory_order_acquire))  { 
+                _mm_pause();    // yields a PAUSE instruction -- release the processor without context switching
+            }
+        }
+        inline bool try_lock() {
+            return !flag.test_and_set(std::memory_order_acquire);
+        }
+        inline void unlock() {
+            flag.clear(std::memory_order_release);
+        }
+
+        template <typename _primitive>
+        inline bool _compare_exchange(atomic<_primitive>& val, _primitive& old_val, _primitive new_val) {
+            //lock();
+            m.lock();
+            _primitive _val = val.load(memory_order_relaxed);
+            if (_val == old_val) {
+                val.store(new_val, memory_order_release);
+                m.unlock();
+                return true;
+            } else {
+                old_val = _val;
+                m.unlock();
+                return false;
+            }
+        }
+    };
+}
+
 namespace mutua::MTL::stack {
     /**
      * UnorderedArrayBasedReentrantStack.hpp
@@ -31,6 +67,8 @@ namespace mutua::MTL::stack {
 
         _BackingArrayElementType* backingArray;
         atomic<unsigned>&         stackHead;
+        atomic<unsigned>          collisions;
+        mutua::MTL::SpinMutex     headGuard;
 
 
         /** initiates a stack manipulation object, receiving as argument pointers to the 'backingArray'
@@ -44,6 +82,7 @@ namespace mutua::MTL::stack {
 
             // start with an empty stack
             stackHead.store(-1, memory_order_release);
+            collisions.store(0, memory_order_release);
         }
 
         /** pushes into the stack one of the elements of the 'backingArray',
@@ -53,12 +92,34 @@ namespace mutua::MTL::stack {
             _BackingArrayElementType* elementSlot = &(backingArray[elementId]);
 
             unsigned int next = stackHead.load(memory_order_relaxed);
-            std::atomic_store_explicit(&elementSlot->next, next, std::memory_order_release);
-            while(!stackHead.compare_exchange_weak(next, elementId,
-                                                     memory_order_release,
-                                                     memory_order_relaxed)) {
-                std::atomic_store_explicit(&elementSlot->next, next, std::memory_order_release);
+
+            // if (unlikely (next == elementId) ) {
+            //     cout << "Error: pushing element #"<<elementId<<" twice ("<<collisions<<" colliisions so far)\n" << flush;
+            // }
+
+            elementSlot->next.store(next, memory_order_release);
+
+            // while (unlikely (!headGuard.compare_exchange(stackHead, next, elementId)) ) {
+            //     elementSlot->next.store(next, memory_order_release);
+            //     //std::this_thread::yield();
+            //     collisions += 1;
+            // }
+
+            // headGuard.lock();
+            while(unlikely (!stackHead.compare_exchange_weak(next, elementId,
+                                                             memory_order_release,
+                                                             memory_order_relaxed)) ) {
+                // atomic_thread_fence(std::memory_order_seq_cst);
+                elementSlot->next.store(next, memory_order_release);
+                ////std::this_thread::yield();
+                // collisions += 1;
             }
+            // headGuard.unlock();
+
+            // if (unlikely (next == elementId) ) {
+            //     cout << "Exception: pushing element #"<<elementId<<" with ->next pointed to itself ("<<collisions<<" collisions so far)\n" << flush;
+            // }
+
             return elementSlot;
 
         }
@@ -69,18 +130,36 @@ namespace mutua::MTL::stack {
 
             unsigned next;
             unsigned headId = stackHead.load(memory_order_relaxed);
+
+            //headGuard.lock();
             do {
                 // is stack empty?
-    			if (headId == -1) {
+    			if (unlikely (headId == -1) ) {
                     *headSlot = nullptr;
     				return -1;
     			}
                 *headSlot = &(backingArray[headId]);
-                next = std::atomic_load_explicit(&((*headSlot)->next), memory_order_relaxed);
-                atomic_thread_fence(memory_order_acquire);
-            } while (!stackHead.compare_exchange_weak(headId, next,
-			                                          memory_order_release,
-			                                          memory_order_relaxed));
+                next = (*headSlot)->next.load(memory_order_relaxed);
+
+                if (likely (stackHead.compare_exchange_weak(headId, next,
+                                                            memory_order_release,
+                                                            memory_order_relaxed)) ) {
+                // if (likely (headGuard.compare_exchange(stackHead, headId, next)) ) {
+                    break;
+                // } else {
+                //     atomic_thread_fence(std::memory_order_seq_cst);
+                //     collisions += 1;
+                //     //std::this_thread::yield();
+                }
+
+            } while (true);
+            //headGuard.unlock();
+
+
+            // if (unlikely (next == headId) ) {
+            //     cout << "Exception: popping an element #"<<headId<<" with ->next pointed to itself ("<<collisions<<" collisions so far)\n" << flush;
+            // }
+
             return headId;
         }
 

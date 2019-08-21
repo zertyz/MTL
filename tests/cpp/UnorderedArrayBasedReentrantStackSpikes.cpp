@@ -23,7 +23,7 @@
 #define BATCH          4096
 #define BACK_AND_FORTH (654321)
 
-#define N_ELEMENTS     (65535)   // should be >= N_THREADS * BATCH
+#define N_ELEMENTS     (655350)   // should be >= N_THREADS * BATCH
 
 
 // test section
@@ -40,13 +40,13 @@ static inline unsigned long long getMonotonicRealTimeNS() {
 /////////////
 
 struct MyStruct {
-    double    n;
-    unsigned  nSqrt;
+    std::atomic<double>    n;
+    std::atomic<unsigned>  nSqrt;
 };
 template <typename _OriginalStruct>
 struct StackElement {
-    alignas(64) atomic<unsigned> next;
-    _OriginalStruct              original;
+    alignas(64) std::atomic<unsigned> next;
+    _OriginalStruct                   original;
 };
 typedef StackElement<MyStruct> MyStackElement;
 
@@ -70,7 +70,7 @@ void populateFreeStack() {
 }
 
 template<typename _StackType, typename _debug>
-void dumpStack(_StackType stack, unsigned expected, string listName, _debug debug) {
+void dumpStack(_StackType& stack, unsigned expected, string listName, _debug debug) {
     if (debug) std::cout << "Checking list '"<<listName<<"'..." << std::flush;
     unsigned count=0;
     MyStackElement* stackEntry;
@@ -83,62 +83,107 @@ void dumpStack(_StackType stack, unsigned expected, string listName, _debug debu
         if (debug) std::cout << poppedId << ",";
     }
     if (debug) std::cout << "\n";
-    std::cout << "Result of checking list '"<<listName<<"': " << (expected == count ? "PASSED":"FAILED") << ": expected="<<expected<<"; counted="<<count<<"\n" << std::flush;
+    std::cout << "Result of checking list '"<<listName<<"': " << (expected == count ? "PASSED":"FAILED") << ": expected="<<expected<<"; counted="<<count<<"; collisions="<<stack.collisions<<"\n" << std::flush;
 }
 
-void backAndForth(unsigned taskId) {
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
+
+#include <chrono>
+std::atomic<unsigned> errorCounter(0);
+void niceExit(int n) {
+    if (unlikely (errorCounter.fetch_add(1) > 30) ) {
+        std::cout << "--> too many errors. Quitting...\n" << std::flush;
+        exit(n);
+    } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100+1000*errorCounter));
+    }
+}
+
+std::atomic<unsigned> r(0);
+std::atomic<unsigned> operationsCount(0);
+std::atomic<unsigned> errorsCount(0);
+void backAndForth(unsigned threadNumber, unsigned taskId) {
     MyStackElement* stackEntry;
     MyStruct* myData;
+    unsigned poppedId;
 
-    for (int i=0; i<BATCH; i++) {
-        unsigned poppedId;
-        while ( (poppedId = freeStack.pop(&stackEntry)) == -1 ) {
-            // 'freeStack' prematurely ran out of elements
-            std::cout << "'freeStack' prematurely ran out of elements. ABORTING...\n" << std::flush;
-            exit(1);
+    for (unsigned i=0; i<BATCH; i++) {
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
+        while (unlikely ((poppedId = freeStack.pop(&stackEntry)) == -1) ) {
+            operationsCount.fetch_add(1);
+//            std::atomic_thread_fence(std::memory_order_seq_cst);
+            std::cout << "'freeStack' prematurely ran out of elements in iteraction "<<i<<" of "<<BATCH<<", thread #"<<threadNumber<<", "<<freeStack.collisions<<" collisions so far. ABORTING...\n" << std::flush;
+            niceExit(1);
         }
-        if (stackEntry->next == poppedId) {
-            std::cout << "'freeStack' entry #"<<poppedId<<", after a pop operation, stated he was the ->next of himself (meaning the 'stackHead' is still pointing to him). ABORTING due to REENTRANCY BUG...\n" << std::flush;
-            exit(1);
-        }
+        operationsCount.fetch_add(1);
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
+
+//         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
+// //            std::atomic_thread_fence(std::memory_order_acquire);
+//             std::cout << "'freeStack' popped entry #"<<poppedId<<" stated he was the ->next of himself (meaning the 'stackHead' is still pointing to him), thread #"<<threadNumber<<", "<<freeStack.collisions<<" collisions so far. ABORTING due to REENTRANCY BUG...\n" << std::flush;
+//             niceExit(1);
+//         }
+// //        std::atomic_thread_fence(std::memory_order_acquire);
 
         myData = &(stackEntry->original);
-        myData->nSqrt = taskId+poppedId;
-        myData->n     = (double)myData->nSqrt*(double)myData->nSqrt;
+        myData->n.store((double)(taskId+poppedId)*(double)(taskId+poppedId), std::memory_order_relaxed);
+        myData->nSqrt.store(taskId+poppedId, std::memory_order_relaxed);
 
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
+        operationsCount.fetch_add(1);
         usedStack.push(poppedId);
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
 
-        if (stackEntry->next == poppedId) {
-            std::cout << "'usedStack' entry #"<<poppedId<<" stated he is the ->next of himself . ABORTING due to REENTRANCY BUG...\n" << std::flush;
-            exit(1);
-        }
+//         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
+// //            std::atomic_thread_fence(std::memory_order_acquire);
+//             std::cout << "'usedStack' pushed entry #"<<poppedId<<" stated he is the ->next of himself, thread #"<<threadNumber<<", "<<usedStack.collisions<<" collisions so far. ABORTING due to REENTRANCY BUG...\n" << std::flush;
+//             niceExit(1);
+//         }
+// //        std::atomic_thread_fence(std::memory_order_acquire);
     }
 
-    for (int i=0; i<BATCH; i++) {
-        unsigned poppedId;
-        while ( (poppedId = usedStack.pop(&stackEntry)) == -1 ) {
-            std::cout << "'usedStack' prematurely ran out of elements. ABORTING...\n" << std::flush;
-            exit(1);
+    for (unsigned i=0; i<BATCH; i++) {
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
+        while (unlikely ((poppedId = usedStack.pop(&stackEntry)) == -1) ) {
+            operationsCount.fetch_add(1);
+//            std::atomic_thread_fence(std::memory_order_seq_cst);
+            std::cout << "'usedStack' prematurely ran out of elements in iteraction "<<i<<" of "<<BATCH<<", thread #"<<threadNumber<<", "<<usedStack.collisions<<" collisions so far. ABORTING...\n" << std::flush;
+            niceExit(1);
         }
-        if (stackEntry->next == poppedId) {
-            std::cout << "'usedStack' entry #"<<poppedId<<", after a pop operation, stated he was the ->next of himself (meaning the 'stackHead' is still pointing to him). ABORTING due to REENTRANCY BUG...\n" << std::flush;
-            exit(1);
-        }
+        operationsCount.fetch_add(1);
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
 
+//         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
+// //            std::atomic_thread_fence(std::memory_order_acquire);
+//             std::cout << "'usedStack' popped entry #"<<poppedId<<" stated he was the ->next of himself (meaning the 'stackHead' is still pointing to him), thread #"<<threadNumber<<", "<<usedStack.collisions<<" collisions so far. ABORTING due to REENTRANCY BUG...\n" << std::flush;
+//             niceExit(1);
+//         }
+// //        std::atomic_thread_fence(std::memory_order_acquire);
+
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
         myData = &(stackEntry->original);
-        unsigned nSqrt = myData->nSqrt;
-        double   n     = myData->n;
+        double   n     = myData->n.load(std::memory_order_relaxed);
+        unsigned nSqrt = myData->nSqrt.load(std::memory_order_relaxed);
         if (n != (double)nSqrt*(double)nSqrt) {
-            std::cout << "popped element #" << poppedId << " assert failed:" << n << " != " << (double)nSqrt*(double)nSqrt << ". ABORTING...\n";
-            exit(1);
+            errorsCount.fetch_add(1);
+            //std::cout << "popped element #" << poppedId << " assert failed: " << n << " != " << (double)nSqrt*(double)nSqrt << ", thread #"<<threadNumber<<", collisions(free,used): "<<freeStack.collisions<<","<<usedStack.collisions<<" so far. continueing anyway...\n" << std::flush;
+            //niceExit(1);
         }
+        r.fetch_add(n+nSqrt);
+////        std::atomic_thread_fence(std::memory_order_seq_cst);
 
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
+        operationsCount.fetch_add(1);
         freeStack.push(poppedId);
+//        std::atomic_thread_fence(std::memory_order_seq_cst);
 
-        if (stackEntry->next == poppedId) {
-            std::cout << "'freeStack' entry #"<<poppedId<<" stated he is the ->next of himself . ABORTING due to REENTRANCY BUG...\n" << std::flush;
-            exit(1);
-        }
+//         if (unlikely (stackEntry->next.load(std::memory_order_relaxed) == poppedId) ) {
+// //            std::atomic_thread_fence(std::memory_order_acquire);
+//             std::cout << "'freeStack' pushed entry #"<<poppedId<<" stated he is the ->next of himself, thread #"<<threadNumber<<", "<<freeStack.collisions<<" collisions so far. ABORTING due to REENTRANCY BUG...\n" << std::flush;
+//             niceExit(1);
+//         }
+// //        std::atomic_thread_fence(std::memory_order_acquire);
     }
 }
 
@@ -167,7 +212,7 @@ int main(void) {
             std::cout << "... end reached\n";
             break;
         }
-        std::cout << "Poped array element #" << poppedId << "...";
+        std::cout << "Popped array element #" << poppedId << "...";
         MyStruct& myData = stackEntry->original;
         std::cout << ": nSqrt=" << myData.nSqrt << "\n";
     }
@@ -178,20 +223,41 @@ int main(void) {
     std::thread threads[N_THREADS];
 	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
 		threads[_threadNumber] = std::thread([](int threadNumber) {
-            for (unsigned taskId=0; taskId<BACK_AND_FORTH; taskId++) {
-                backAndForth(BACK_AND_FORTH*threadNumber+taskId);
+            for (unsigned taskId=threadNumber; taskId<BACK_AND_FORTH; taskId++) {
+                backAndForth(threadNumber, BACK_AND_FORTH*threadNumber+taskId);
+                if ( (taskId % ((BACK_AND_FORTH/(threadNumber+1))-1)) == 0 ) {
+                    std::cout << "." << std::flush;
+                }
             }
         }, _threadNumber);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10*_threadNumber));
 	}
+
+    // statistics
+    unsigned lastOperationsCount = 0;
+    unsigned deltaOps;
+    unsigned lastErrorsCount = 0;
+    unsigned deltaErrs;
+    do {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        deltaOps = operationsCount-lastOperationsCount;
+        lastOperationsCount += deltaOps;
+        deltaErrs = errorsCount-lastErrorsCount;
+        lastErrorsCount += deltaErrs;
+        std::cout << "Performance: " << deltaOps << " \tops/s; \t" << deltaErrs << "   \terr/s   \t(" << lastErrorsCount << " \ttotal)    \r" << std::flush;
+    } while ((deltaOps > 0) || (deltaErrs > 0));
+
     for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
     	threads[_threadNumber].join();
+        std::cout << "#" << std::flush;
     }
     unsigned long long finish = getMonotonicRealTimeNS();
 
+    std::cout << std::endl << std::flush;
     dumpStack(freeStack, N_ELEMENTS, "freeStack", false);
     dumpStack(usedStack, 0, "usedStack", false);
 
-    std::cout << "--> Executed in " << ((finish-start) / (unsigned long long)1000'000) << "ms.\n";
+    std::cout << "--> Executed in " << ((finish-start) / (unsigned long long)1000'000) << "ms (r=="<<r<<").\n";
 
     return 0;
 }
