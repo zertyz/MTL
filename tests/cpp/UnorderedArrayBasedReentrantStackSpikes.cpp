@@ -40,15 +40,15 @@ static inline unsigned long long getMonotonicRealTimeNS() {
 /////////////
 
 struct MyStruct {
-    double    n;
-    unsigned  nSqrt;
+    double      n;
+    unsigned    nSqrt;
+    std::mutex  mutex;
 };
 template <typename _OriginalStruct>
 struct StackElement {
-    alignas(64) unsigned next;
-    _OriginalStruct      original;
-    std::atomic_flag                  atomic_flag = ATOMIC_FLAG_INIT;
-    //std::mutex           mutex;
+    alignas(64) atomic<unsigned> next;
+    _OriginalStruct              original;
+    //std::atomic_flag             atomic_flag = ATOMIC_FLAG_INIT;
 };
 typedef StackElement<MyStruct> MyStackElement;
 
@@ -129,8 +129,10 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 // //        std::atomic_thread_fence(std::memory_order_acquire);
 
         myData = &(stackEntry->original);
+        myData->mutex.lock();
         myData->n = (double)(taskId+poppedId)*(double)(taskId+poppedId);
         myData->nSqrt = taskId+poppedId;
+        myData->mutex.unlock();
 
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
         operationsCount.fetch_add(1);
@@ -165,8 +167,10 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
 
 //        std::atomic_thread_fence(std::memory_order_seq_cst);
         myData = &(stackEntry->original);
+        myData->mutex.lock();
         double   n     = myData->n;
         unsigned nSqrt = myData->nSqrt;
+        myData->mutex.unlock();
         if (n != (double)nSqrt*(double)nSqrt) {
             errorsCount.fetch_add(1);
             //std::cout << "popped element #" << poppedId << " assert failed: " << n << " != " << (double)nSqrt*(double)nSqrt << ", thread #"<<threadNumber<<", collisions(free,used): "<<freeStack.collisions<<","<<usedStack.collisions<<" so far. continueing anyway...\n" << std::flush;

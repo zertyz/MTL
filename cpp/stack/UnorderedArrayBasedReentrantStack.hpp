@@ -92,30 +92,24 @@ namespace mutua::MTL::stack {
             _BackingArrayElementType* elementSlot = &(backingArray[elementId]);
 
             unsigned int next = stackHead.load(memory_order_relaxed);
+            elementSlot->next.store(next, memory_order_release);
 
             // if (unlikely (next == elementId) ) {
             //     cout << "Error: pushing element #"<<elementId<<" twice ("<<collisions<<" colliisions so far)\n" << flush;
             // }
 
-
-            // while (unlikely (!headGuard.compare_exchange(stackHead, next, elementId)) ) {
-            //     elementSlot->next.store(next, memory_order_release);
-            //     //std::this_thread::yield();
-            //     collisions += 1;
-            // }
-
-            // headGuard.lock();
             while(unlikely (!stackHead.compare_exchange_weak(next, elementId,
                                                              memory_order_release,
-                                                             memory_order_relaxed)) );
-            // headGuard.unlock();
+                                                             memory_order_relaxed)) ) {
+                elementSlot->next.store(next, memory_order_release);
+
+            }
 
             // if (unlikely (next == elementId) ) {
             //     cout << "Exception: pushing element #"<<elementId<<" with ->next pointed to itself ("<<collisions<<" collisions so far)\n" << flush;
             // }
 
-            elementSlot->next = next;
-            elementSlot->atomic_flag.clear(std::memory_order_release);
+            // elementSlot->atomic_flag.clear(std::memory_order_release);
             //elementSlot->mutex.unlock();
 
             return elementSlot;
@@ -126,37 +120,10 @@ namespace mutua::MTL::stack {
          *  Returns 'nullptr' if the stack is empty */
         inline unsigned pop(_BackingArrayElementType** slot) {
 
-            // atomic<unsigned>*         head = &stackHead;
             _BackingArrayElementType* headSlot;
             unsigned                  headId;
-            /*unsigned                  next;*/
+            unsigned                  next;
 
-            // // find 'head': a poppable entry near the top of the stack
-            // // (an entry which has a cleared 'atomic_flag')
-            // do {
-            //     headId = head->load(memory_order_relaxed);
-            //     if (unlikely (headId == -1) ) {
-            //         *slot = nullptr;
-            //         return -1;
-            //     }
-            //     headSlot = &(backingArray[headId]);
-            //     // is the slot unlocked? lock it. This is the one we'll pop
-            //     if (likely (!headSlot->atomic_flag.test_and_set(std::memory_order_acquire)) ) {
-            //         break;
-            //     }
-            //     head = &(headSlot->next);
-            // } while (true);
-
-            // // at this point we have 'head', 'headSlot' and 'headId' pointed to 
-            // // the (already locked) slot to be popped
-
-            // *slot = headSlot;
-
-            // // 
-            // next = headSlot->next.load(memory_order_relaxed);
-            // while (unlikely (!head->compare_exchange_weak(headId, next,
-            //                                               memory_order_release,
-            //                                               memory_order_relaxed)) );
 
             headId = stackHead.load(memory_order_relaxed);
             do {
@@ -166,15 +133,14 @@ namespace mutua::MTL::stack {
                     return -1;
                 }
                 headSlot = &(backingArray[headId]);
-
-            } while (unlikely (!stackHead.compare_exchange_weak(headId, headSlot->next,
+                next = headSlot->next.load(memory_order_relaxed);
+            } while (unlikely (!stackHead.compare_exchange_weak(headId, next,
                                                                 memory_order_release,
                                                                 memory_order_relaxed)) );
 
-            // wait until the slot can be acquired -- and lock it
-            while (likely (!headSlot->atomic_flag.test_and_set(std::memory_order_acquire)) ) ;
-            //headSlot->mutex.lock();
-
+            // // wait until the slot can be acquired -- and lock it
+            // while (unlikely (!headSlot->atomic_flag.test_and_set(std::memory_order_acquire)) ) ;
+            // //headSlot->mutex.lock();
 
             *slot = headSlot;
             return headId;
