@@ -47,6 +47,8 @@ template <typename _OriginalStruct>
 struct StackElement {
     alignas(64) std::atomic<unsigned> next;
     _OriginalStruct                   original;
+//    std::atomic_flag                  atomic_flag = ATOMIC_FLAG_INIT;
+    std::mutex                        mutex;
 };
 typedef StackElement<MyStruct> MyStackElement;
 
