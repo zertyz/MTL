@@ -101,13 +101,19 @@ mutua::MTL::SpinMutex     m;
             stackHead.store(-1, memory_order_release);
 
             if constexpr (_OpMetrics) {
-                pushCount.store(0, memory_order_release);
-                popCount.store(0, memory_order_release);
+                pushCount = 0;
+                popCount  = 0;
+            } else {
+                pushCount = -1;
+                popCount  = -1;
             }
 
             if constexpr (_ColMetrics) {
-                pushCollisions.store(0, memory_order_release);
-                popCollisions.store(0, memory_order_release);
+                pushCollisions = 0;
+                popCollisions  = 0;
+            } else {
+                pushCollisions = -1;
+                popCollisions  = -1;
             }
         }
 
@@ -118,7 +124,7 @@ mutua::MTL::SpinMutex     m;
             _BackingArrayElementType* elementSlot = &(backingArray[elementId]);
 
             unsigned int next = stackHead.load(memory_order_relaxed);
-            elementSlot->next.store(next, memory_order_release);
+            elementSlot->next = next;
 
             // debug
             if constexpr (_Debug) if (unlikely (next == elementId) ) {
@@ -129,7 +135,7 @@ mutua::MTL::SpinMutex     m;
             while (unlikely (!stackHead.compare_exchange_strong(next, elementId,
                                                                       memory_order_release,
                                                                       memory_order_relaxed)) ) {
-                elementSlot->next.store(next, memory_order_release);
+                elementSlot->next = next;
 
                 if constexpr (_ColMetrics) {
                     pushCollisions.fetch_add(1, memory_order_relaxed);
@@ -178,7 +184,7 @@ mutua::MTL::SpinMutex     m;
                     return -1;
                 }
                 *headSlot = &(backingArray[headId]);
-                next = (*headSlot)->next.load(memory_order_relaxed);
+                next = (*headSlot)->next;
 
                 if (likely (stackHead.compare_exchange_strong(headId, next,
                                                               memory_order_release,

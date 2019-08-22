@@ -42,6 +42,25 @@ static inline unsigned long long getMonotonicRealTimeNS() {
 }
 
 
+// info section
+///////////////
+struct DoubleIntStruct {
+    alignas(sizeof(unsigned)*2) unsigned a;
+                                unsigned b;
+};
+void printHardwareInfo() {
+    std::atomic<unsigned>        a_int;
+    std::atomic<DoubleIntStruct> a_DoubleIntStruct;
+    std::cout << "For this hardware:\n"
+              << std::boolalpha
+              << "\tis std::atomic<int> lock free?                    : "  << std::atomic_is_lock_free(&a_int) << '\n'
+              << "\tis std::atomic<struct{int,int}> lock free?        : "  << std::atomic_is_lock_free(&a_DoubleIntStruct) << '\n'
+              << "\tstd::atomic<int>::is_always_lock_free             : "  << std::atomic<unsigned>::is_always_lock_free << '\n'
+              << "\tstd::atomic<struct{int,int}>::is_always_lock_free : "  << std::atomic<DoubleIntStruct>::is_always_lock_free << '\n'
+    ;
+}
+
+
 // spike vars
 /////////////
 
@@ -54,8 +73,10 @@ struct MyStruct {
 };
 template <typename _OriginalStruct>
 struct StackElement {
-    alignas(64) atomic<unsigned> next;
-    _OriginalStruct              original;
+    // when we can implement a lock free stack, maybe an atomic pointer will be needed
+    //alignas(64) atomic<unsigned> next;
+    unsigned         next;
+    _OriginalStruct  original;
 };
 typedef StackElement<MyStruct> MyStackElement;
 
@@ -68,9 +89,9 @@ mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS,
 ////////////////
 
 alignas(64) std::atomic<unsigned>  usedStackHead;
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> usedStack(backingArray, usedStackHead);
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, false> usedStack(backingArray, usedStackHead);
 alignas(64) std::atomic<unsigned>  freeStackHead;
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> freeStack(backingArray, freeStackHead);
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, false> freeStack(backingArray, freeStackHead);
 
 void populateFreeStack() {
     for (unsigned i=0; i<N_ELEMENTS; i++) {
@@ -179,6 +200,7 @@ int main(void) {
 
 	std::cout << DOCS;
 
+    printHardwareInfo();
 
     std::cout << "\n\nStaring the simple tests:\n";
     int anagram[] = {1,2,3,4,4,3,2,1};
@@ -225,7 +247,7 @@ int main(void) {
     // join the threads, showing the statistics...
     {
         #define PAD(_number, _width)          std::setfill(' ') << std::setw(_width) << std::fixed << _number
-        #define DECLARE_STATS(_name)          unsigned last ## _name; unsigned delta ## _name;
+        #define DECLARE_STATS(_name)          unsigned last ## _name = 0; unsigned delta ## _name;
         #define TICK_STATS(_name, _expr)      delta ## _name = _expr-last ## _name; last ## _name += delta ## _name;
         #define GET_STATS(_name, _unit, _pad) << PAD(delta ## _name, _pad) << " " _unit
         
@@ -238,7 +260,7 @@ int main(void) {
             TICK_STATS(OperationsCount, OPERATIONS_COUNT);
             TICK_STATS(CollisionsCount, COLLISIONS_COUNT);
             TICK_STATS(ErrorsCount,     errorsCount);
-            std::cout << "Performance: " GET_STATS(OperationsCount, "op/s", 8) "  |  " GET_STATS(CollisionsCount, "col/s", 6) "  |  " << PAD(runningThreads, 2) << " threads  |  " GET_STATS(ErrorsCount, "err/s", 3) " (" << std::fixed << lastErrorsCount << "  total)      \r" << std::flush;
+            std::cout << "\rPerformance: " GET_STATS(OperationsCount, "op/s", 8) "  |  " GET_STATS(CollisionsCount, "col/s", 6) "  |  " << PAD(runningThreads, 2) << " threads  |  " GET_STATS(ErrorsCount, "err/s", 3) " (" << std::fixed << lastErrorsCount << "  total)          " << std::flush;
         } while ( (runningThreads != 0) && ((deltaOperationsCount > 0) || (deltaErrorsCount > 0)) );
 
         // now join all threads
