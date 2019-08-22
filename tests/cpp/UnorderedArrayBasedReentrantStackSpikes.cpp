@@ -74,24 +74,17 @@ struct MyStruct {
 template <typename _OriginalStruct>
 struct StackElement {
     // when we can implement a lock free stack, maybe an atomic pointer will be needed
-    //alignas(64) atomic<unsigned> next;
-    unsigned         next;
+    alignas(64) atomic<unsigned> next;
+    //unsigned         next;
     _OriginalStruct  original;
 };
 typedef StackElement<MyStruct> MyStackElement;
 
+// the stacks
 MyStackElement         backingArray[N_ELEMENTS];
-alignas(64) std::atomic<unsigned>  stackHead;
-
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> stack(backingArray, stackHead);
-
-// spike methods
-////////////////
-
-alignas(64) std::atomic<unsigned>  usedStackHead;
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, false> usedStack(backingArray, usedStackHead);
-alignas(64) std::atomic<unsigned>  freeStackHead;
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, false> freeStack(backingArray, freeStackHead);
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> stack(backingArray);
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> usedStack(backingArray);
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> freeStack(backingArray);
 
 void populateFreeStack() {
     for (unsigned i=0; i<N_ELEMENTS; i++) {
@@ -119,6 +112,10 @@ void dumpStack(_StackType& stack, unsigned expected, string listName, _debug deb
     if (debug) std::cout << "\n";
     std::cout << "Result of checking list '"<<listName<<"': " << (expected == count ? "PASSED":"FAILED") << ": expected="<<expected<<"; counted="<<count<<"; collisions="<<COLLISIONS_COUNT<<"\n" << std::flush;
 }
+
+
+// spike methods
+////////////////
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -207,13 +204,19 @@ int main(void) {
     constexpr int anagram_length = sizeof(anagram)/sizeof(anagram[0]);
 
     for (int i=1010; i<1010+anagram_length; i++) {
-        std::cout << "Populating and pushing array element #" << i << " (stackHead is now " << stackHead << ")...";
+        std::cout << "Populating and pushing array element #" << i << " (stackHead is now " << stack.getStackHead() << ")...";
         MyStackElement* stackEntry = stack.push(i);
         MyStruct& myData = stackEntry->original;
         myData.nSqrt = anagram[i-1010];
         myData.n     = anagram[i-1010]*anagram[i-1010];
         std::cout << " OK\n";
     }
+
+    // dump the array
+    for (int i=1010; i<1010+anagram_length; i++) {
+        std::cout << "backingArray["<<i<<"](next, nSqrt) == {" << backingArray[i].next << ", " << backingArray[i].original.nSqrt << "},\n";
+    }
+    std::cout << "stackHead = " << stack.getStackHead() << "; stackHead->next = " << stack.getStackHeadNext() << "\n";
 
     while (true) {
         MyStackElement* stackEntry;

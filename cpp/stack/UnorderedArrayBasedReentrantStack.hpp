@@ -13,7 +13,7 @@ using namespace std;
 
 //#include <xmmintrin.h>
 namespace mutua::MTL {
-    struct SpinMutex {
+    struct SpinLock {
         std::atomic_flag flag = ATOMIC_FLAG_INIT;
         std::mutex m;
         inline void lock() {
@@ -64,41 +64,49 @@ namespace mutua::MTL::stack {
     template <typename _BackingArrayElementType, unsigned _BackingArrayLength,
               bool    _OpMetrics  = false,   // set to true if you want to keep track of the number of operations performed
               bool    _ColMetrics = false,   // when set, keeps track of the number of "spin lock loops" performed due to concurrent operation
-              bool    _Debug   = false>      // enable to output to stderr debug information & activelly check for reentrancy errors
+              bool    _Debug      = false>   // enable to output to stderr debug information & activelly check for reentrancy errors
     class UnorderedArrayBasedReentrantStack {
 
     public:
 
+        // NOTE: the following pointers and counters are declared with 'alignas(64)'
+        // to prevent performance degradation via the false-sharing phenomenon.
+
+        // this structure is known to be atomic in: x86_64, armv7l (Raspberry Pi 2),
+        // armv6h (Raspberry Pi 1, if compiling with gcc -- clang version 8.0.1 (tags/RELEASE_801/final) fails at this)
+        // (alignas(sizeof(int)*2) would never be needed since we are already caring for false-sharing)
+        struct AtomicPointer {
+            unsigned ptr;
+            unsigned next;
+        };
+
         _BackingArrayElementType* backingArray;
-        atomic<unsigned>&         stackHead;
+        //atomic<unsigned>&         stackHead;
+        alignas(64) atomic<AtomicPointer>   stackHead;
 
         // operation metrics
-        atomic<unsigned>          pushCount;
-        atomic<unsigned>          popCount;
+        alignas(64) atomic<unsigned>        pushCount;
+        alignas(64) atomic<unsigned>        popCount;
 
         // collision metrics
-        atomic<unsigned>          pushCollisions;
-        atomic<unsigned>          popCollisions;
+        alignas(64) atomic<unsigned>        pushCollisions;
+        alignas(64) atomic<unsigned>        popCollisions;
 
         // debug
-        string                    stackName;
+        string                              stackName;
 //mutex                     m;
-mutua::MTL::SpinMutex     m;
+mutua::MTL::SpinLock     m;
 
 
-        /** initiates a stack manipulation object, receiving as argument pointers to the 'backingArray'
-         *  and the atomic 'stackHead' pointer.
-         *  Please note that 'stackHead' must be declared using 'alignas(64)' to prevent performance
-         *  degradation via the false-sharing phenomenon */
+        /** initiates a stack manipulation object, receiving as argument a pointer to the pre-allocated
+         *  pool of slots named 'backingArray' */
         UnorderedArrayBasedReentrantStack(_BackingArrayElementType* backingArray,
-                                          atomic<unsigned>&         stackHead,
                                           const string              stackName = "noname_debug_stack")
             : backingArray (backingArray)
-            , stackHead    (stackHead)
             , stackName    (stackName) {
 
             // start with an empty stack
-            stackHead.store(-1, memory_order_release);
+            stackHead.store({(unsigned)-1, (unsigned)-1}, memory_order_release);
 
             if constexpr (_OpMetrics) {
                 pushCount = 0;
@@ -123,19 +131,22 @@ mutua::MTL::SpinMutex     m;
 
             _BackingArrayElementType* elementSlot = &(backingArray[elementId]);
 
-            unsigned int next = stackHead.load(memory_order_relaxed);
-            elementSlot->next = next;
+            AtomicPointer currentHead = stackHead.load(memory_order_relaxed);
+
+            AtomicPointer pushedHead    = {elementId, currentHead.ptr};
+            elementSlot->next.store(currentHead.ptr, memory_order_release);
 
             // debug
-            if constexpr (_Debug) if (unlikely (next == elementId) ) {
+            if constexpr (_Debug) if (unlikely (currentHead.ptr == elementId) ) {
                 cerr << "mutua::MTL::stack::UnorderedArrayBasedReentrantStack('"<<stackName<<"') -- Usage Error: pushing element #"<<elementId<<" twice in a row\n" << flush;
             }
 
             // the "spin lock" to to set the new 'stackHead' and 'elementSlot->next'
-            while (unlikely (!stackHead.compare_exchange_strong(next, elementId,
-                                                                      memory_order_release,
-                                                                      memory_order_relaxed)) ) {
-                elementSlot->next = next;
+            while (unlikely (!stackHead.compare_exchange_strong(currentHead, pushedHead,
+                                                                memory_order_release,
+                                                                memory_order_relaxed)) ) {
+                elementSlot->next.store(currentHead.ptr, memory_order_release);
+                pushedHead.next = currentHead.ptr;
 
                 if constexpr (_ColMetrics) {
                     pushCollisions.fetch_add(1, memory_order_relaxed);
@@ -144,7 +155,7 @@ mutua::MTL::SpinMutex     m;
             }
 
             // debug
-            if constexpr (_Debug) if (unlikely (next == elementId) ) {
+            if constexpr (_Debug) if (unlikely (currentHead.ptr == elementId) ) {
                 cerr << "mutua::MTL::stack::UnorderedArrayBasedReentrantStack('"<<stackName<<"') -- Reentrancy Error: just pushed element #"<<elementId<<" and it ended having it's ->next pointed to itself\n" << flush;
             }
 
@@ -160,8 +171,8 @@ mutua::MTL::SpinMutex     m;
          *  Returns 'nullptr' if the stack is empty */
         inline unsigned pop(_BackingArrayElementType** headSlot) {
 
-            unsigned headId;
-            unsigned next;
+            alignas(sizeof(unsigned)*2) AtomicPointer currentHead;
+            alignas(sizeof(unsigned)*2) AtomicPointer nextHead;
 
             // this is the pop loop. This could not be done using just CAS (compare and exchange)
             // because of the ABA problem -- https://en.wikipedia.org/wiki/ABA_problem
@@ -169,39 +180,53 @@ mutua::MTL::SpinMutex     m;
             // both the HEAD and its NEXT in a single operation. That might be done if we manage to
             // put them both in a struct -- the ListHead structure.
 
+            currentHead = stackHead.load(memory_order_relaxed);
+
             do {
-                // is stack empty? we check this out of the spin lock because it is so cheap we may do it twice
-                if (unlikely (headId == -1) ) {
+                // is stack empty?
+                if (unlikely (currentHead.ptr == -1) ) {
                     *headSlot = nullptr;
                     return -1;
                 }
 
-                m.lock();
-                headId = stackHead.load(memory_order_relaxed);
-                // check again if the stack became empty
-                if (unlikely (headId == -1) ) {
-                    *headSlot = nullptr;
-                    return -1;
-                }
-                *headSlot = &(backingArray[headId]);
-                next = (*headSlot)->next;
+                // the potential slot to be popped -- when the CAS operation succeeds
+                *headSlot = &(backingArray[currentHead.ptr]);
 
-                if (likely (stackHead.compare_exchange_strong(headId, next,
+                // if CAS is to succeed, 'nextHead.ptr' should be the same as 'currentHead.next'. Let's check:
+                nextHead.ptr = (*headSlot)->next.load(memory_order_relaxed);
+                if (nextHead.ptr != currentHead.next) {
+//std::cout << "--> exiting because nextHead.ptr != currentHead.next: " << nextHead.ptr << " != " << currentHead.next << "\n";
+//exit(1);
+                    // head->next has changed. No need for a CAS operation, since it will fail. Let's loop again and try one more time...
+                    if constexpr (_ColMetrics) {    // account for the collision metrics
+                        popCollisions.fetch_add(1, memory_order_relaxed);
+                    }
+                    currentHead = stackHead.load(memory_order_relaxed);
+                    continue;
+                }
+
+                // keep on building the 'nextHead' structure -- to replace 'stackHead' when the CAS succeeds
+                if (nextHead.ptr == -1) {
+                    nextHead.next = -1;
+                } else {
+                    _BackingArrayElementType* nextSlot = &(backingArray[nextHead.ptr]);
+                    nextHead.next = nextSlot->next.load(memory_order_relaxed);
+                }
+
+                if (likely (stackHead.compare_exchange_strong(currentHead, nextHead,
                                                               memory_order_release,
                                                               memory_order_relaxed))) {
-                    m.unlock();                
                     break;
                 } else if constexpr (_ColMetrics) {
                     popCollisions.fetch_add(1, memory_order_relaxed);
                 }
-                m.unlock();                
             } while (true);
 
             if constexpr (_OpMetrics) {
                 popCount.fetch_add(1, memory_order_relaxed);
             }
 
-            return headId;
+            return currentHead.ptr;
         }
 
 
@@ -210,6 +235,16 @@ mutua::MTL::SpinMutex     m;
         inline _BackingArrayElementType* pop() {
             _BackingArrayElementType* headSlot;
             return pop(&headSlot);
+        }
+
+        inline unsigned getStackHead() {
+            AtomicPointer head = stackHead.load(memory_order_relaxed);
+            return head.ptr;
+        }
+
+        inline unsigned getStackHeadNext() {
+            AtomicPointer head = stackHead.load(memory_order_relaxed);
+            return head.next;
         }
 
     };
