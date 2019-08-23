@@ -7,7 +7,7 @@
 
 #include "../../cpp/stack/UnorderedArrayBasedReentrantStack.hpp"
 
-// compile with (clan)g++ -std=c++17 -O3 -march=native -mtune=native -pthread UnorderedArrayBasedReentrantStackSpikes.cpp -o UnorderedArrayBasedReentrantStackSpikes
+// compile with (clan)g++ -std=c++17 -O3 -march=native -mtune=native -pthread -latomic UnorderedArrayBasedReentrantStackSpikes.cpp -o UnorderedArrayBasedReentrantStackSpikes
 
 #define DOCS "spikes on 'UnorderedArrayBasedReentrantStack'\n" \
              "=============================================\n" \
