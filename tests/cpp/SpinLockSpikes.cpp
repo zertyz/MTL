@@ -64,7 +64,8 @@ mutua::MTL::SpinLock consumingSpinLock;
 ///////////////
 
 void check(unsigned long long& elapsed) {
-    if ( (producerCount == consumerCount) && (producerCount  == NUMBER_OF_EVENTS_PER_MEASURE) ) {
+    if ( (producerCount == NUMBER_OF_EVENTS_PER_MEASURE+N_THREADS) && (consumerCount  == NUMBER_OF_EVENTS_PER_MEASURE+N_THREADS) ) {
+        // note on the above check: N_THREAD extra events are needed to stop the consumers -- one for each consumer
         std::cout << "--> Checking PASSED for " << NUMBER_OF_EVENTS_PER_MEASURE << " events! --> " << PAD(elapsed / NUMBER_OF_EVENTS_PER_MEASURE, 4) << "ns per event\n\n";
     } else {
         std::cout << "--> Checking FAILED: only " << producerCount << " events were produced, " << consumerCount << " consumed for a total of " << NUMBER_OF_EVENTS_PER_MEASURE << " expected...\n\n";
@@ -77,43 +78,37 @@ void check(unsigned long long& elapsed) {
 
 
 void reset() {
-    producerCount = 0;
-    consumerCount = 0;
-    stopConsumers = false;
-    numberOfActiveConsumers = 0;
+    producerCount.store(0, std::memory_order_release);
+    consumerCount.store(0, std::memory_order_release);
+    stopConsumers.store(false, std::memory_order_release);
+    numberOfActiveConsumers.store(0, std::memory_order_release);
 }
 
 
 void mutexProducer() {
     for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
         producingMutex.lock();
-        producerCount++;
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumingMutex.unlock();
     }
     stopConsumers = true;
 
-    // wait for the last event to be consumed
-    while (producerCount > consumerCount) ;
-
-    unsigned _producerCount = producerCount;
-    unsigned _consumerCount = consumerCount;
-
     // generate extra events to stop the consumers
-    while (numberOfActiveConsumers > 0) {
+    for (unsigned i=0; i<N_THREADS; i++) {
         producingMutex.lock();
-        producerCount++;
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumingMutex.unlock();
     }
-    // restore the measured events
-    producerCount = _producerCount;
-    consumerCount = _consumerCount;
+
+    // wait for consumers to finish
+    while (numberOfActiveConsumers > 0) ;
 }
 
 void mutexConsumer() {
     numberOfActiveConsumers++;
     while (!stopConsumers) {
         consumingMutex.lock();
-        consumerCount++;
+        consumerCount.fetch_add(1, std::memory_order_acq_rel);
         producingMutex.unlock();
     }
     numberOfActiveConsumers--;
@@ -123,33 +118,27 @@ void mutexConsumer() {
 void spinLockProducer() {
     for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
         producingSpinLock.lock();
-        producerCount++;
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumingSpinLock.unlock();
     }
     stopConsumers = true;
 
-    // wait for the last event to be consumed
-    while (producerCount > consumerCount) ;
-
-    unsigned _producerCount = producerCount;
-    unsigned _consumerCount = consumerCount;
-    
     // generate extra events to stop the consumers
-    while (numberOfActiveConsumers > 0) {
+    for (unsigned i=0; i<N_THREADS; i++) {
         producingSpinLock.lock();
-        producerCount++;
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumingSpinLock.unlock();
     }
-    // restore the measured events
-    producerCount = _producerCount;
-    consumerCount = _consumerCount;
+
+    // wait for consumers to finish
+    while (numberOfActiveConsumers > 0) ;
 }
 
 void spinLockConsumer() {
     numberOfActiveConsumers++;
     while (!stopConsumers) {
         consumingSpinLock.lock();
-        consumerCount++;
+        consumerCount.fetch_add(1, std::memory_order_acq_rel);
         producingSpinLock.unlock();
     }
     numberOfActiveConsumers--;
@@ -159,45 +148,44 @@ void spinLockConsumer() {
 void busyWaitProducer() {
     for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
         while (producerCount > consumerCount) ;     // the busy wait loop
-        producerCount++;
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
 //        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 //        std::cerr << "produced="<<producerCount<<"; consumed="<<consumerCount<<std::endl;
 
     }
+
+    // generate extra events to stop the consumers
+    for (unsigned i=0; i<N_THREADS; i++) {
+        while (producerCount > consumerCount) ;
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    // the stop logic is a little different for this busy wait producers/consumers
     stopConsumers = true;
 
-    // wait for the last event to be consumed
-    while (producerCount > consumerCount) ;
-
-    unsigned _producerCount = producerCount;
-    unsigned _consumerCount = consumerCount;
-    
-    // generate extra events to stop the consumers
-    while (numberOfActiveConsumers > 0) {
-        while (producerCount > consumerCount) ;
-        producerCount++;
-    }
-    // restore the measured events
-    producerCount = _producerCount;
-    consumerCount = _consumerCount;
+    // wait for consumers to finish
+    while (numberOfActiveConsumers > 0) ;
 }
 
 void busyWaitConsumer() {
     numberOfActiveConsumers++;
-    while (!stopConsumers) {
-        while (producerCount == consumerCount) ;     // the busy wait loop -- remembar all consumers may leave this loop at once
-        // all consumers may leave the loop at once, but only one should increase the counter
-        unsigned targetConsumerCount = producerCount-1;
-        consumerCount.compare_exchange_strong(targetConsumerCount, consumerCount+1);
+    while ( (!stopConsumers) || (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire)) ) {
+        unsigned targetConsumerCount = producerCount.load(std::memory_order_acquire)-1;
+        consumerCount.compare_exchange_strong(targetConsumerCount, consumerCount.load(std::memory_order_acquire)+1);
     }
     numberOfActiveConsumers--;
 }
 
 void linearProducerConsumer() {
+    // simulates the work the others producers / consumers do: simply increase their counters
     for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
-        // simulates the work the others producers / consumers do: simply increase their counters
-        producerCount++;
-        consumerCount++;
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
+        consumerCount.fetch_add(1, std::memory_order_acq_rel);
+    }
+    // simulates the work done by others to stop the consumers
+    for (unsigned i=0; i<N_THREADS; i++) {
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
+        consumerCount.fetch_add(1, std::memory_order_acq_rel);
     }
 }
 
