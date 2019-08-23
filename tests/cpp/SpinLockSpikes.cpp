@@ -25,8 +25,22 @@
              "      for how fast can our hardware do.\n"
 
 
-#define NUMBER_OF_EVENTS_PER_MEASURE 2143657
-#define N_THREADS                    (std::thread::hardware_concurrency()-1)    // remember we have 1 thread for the consumer
+/** This number will get multiplyed by a function of consumer and producer threads
+    and also the lock algorithm to give the total number of events to be processed */
+#define BASE_NUMBER_OF_EVENTS 4312      // must be divisible by each number of consumers used
+
+/** N_PRODUCERS_CONSUMERS := {{nProducers1, nConsumers1}, {nProducers2, nConsumers2}, ...}
+    where 1, 2, ... correspond to 'nTest' -- the test number to perform */
+constexpr unsigned N_PRODUCERS_CONSUMERS[][2]   = {{1,1}, {1,10}, {1,100}, {2,1}, {2,10}, {2,100}, {4,1}, {4,10}, {4,100}};
+
+/** 'N_EVENTS_FACTOR[nTest] * BASE_NUMBER_OF_EVENTS' specifyes the number of events to run for each 'N_PRODUCERS_CONSUMERS[nTest]' pair */
+constexpr unsigned N_EVENTS_FACTOR[]            = {  400,     40,      4,   200,      20,       2,   100,     10,       1};
+constexpr unsigned N_TESTS_PER_STRATEGY         = sizeof(N_PRODUCERS_CONSUMERS)/sizeof(N_PRODUCERS_CONSUMERS[0]);
+static_assert(N_TESTS_PER_STRATEGY == sizeof(N_EVENTS_FACTOR)/sizeof(N_EVENTS_FACTOR[0]),
+              "'N_PRODUCERS_CONSUMERS' and 'N_EVENTS_FACTOR' must be of the same length");
+
+/** Multiplication factor for each algorithm:     {mutex, relaxed spin-lock, busy spin-lock, busy wait, linear} */
+constexpr unsigned STRATEGY_FACTOR[]            = {    1,                10,             10,        10,    1000};
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -34,8 +48,8 @@
 #define PAD(_number, _width)         std::setfill(' ') << std::setw(_width) << std::fixed << (_number)
 
 
-#define DEBUG_PRODUCER     std::this_thread::sleep_for(std::chrono::milliseconds(1000)); \
-                           std::cerr << "produced="<<producerCount<<"; consumed="<<consumerCount<<std::endl;
+#define DEBUG_PRODUCER     {std::this_thread::sleep_for(std::chrono::milliseconds(1000)); \
+                            std::cerr << "produced="<<producerCount<<"; consumed="<<consumerCount<<std::endl;}
 
 
 // test section
@@ -70,11 +84,10 @@ mutua::MTL::SpinLock<false> consumingBusySpinLock;
 // info section
 ///////////////
 
-void check(unsigned long long& elapsed) {
-    if ( (producerCount == NUMBER_OF_EVENTS_PER_MEASURE) && (consumerCount  == NUMBER_OF_EVENTS_PER_MEASURE) ) {
-        std::cout << "--> Checking PASSED for " << NUMBER_OF_EVENTS_PER_MEASURE << " events! --> " << PAD(elapsed / NUMBER_OF_EVENTS_PER_MEASURE, 4) << "ns per event\n\n";
-    } else {
-        std::cout << "--> Checking FAILED: only " << producerCount << " events were produced, " << consumerCount << " consumed for a total of " << NUMBER_OF_EVENTS_PER_MEASURE << " expected...\n\n";
+void check(unsigned& nEvents) {
+    if ( (producerCount != nEvents) || (consumerCount != nEvents) ) {
+        std::cout << "--> Checking FAILED: only " << producerCount << " events were produced, " << consumerCount << " consumed for a total of " << nEvents << " expected. Exiting..\n\n";
+        exit(1);
     }
 }
 
@@ -96,12 +109,15 @@ void reset() {
 }
 
 
-void mutexProducer() {
-    for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
+void mutexProducer(unsigned nEvents) {
+    for (unsigned i=0; i<nEvents; i++) {
         producingMutex.lock();
         producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumingMutex.unlock();
     }
+}
+
+void mutexStop() {
     // ask consumers to stop & wait for them
     producingMutex.lock();
     stopConsumers.store(true, std::memory_order_release);
@@ -126,12 +142,15 @@ void mutexConsumer() {
 }
 
 
-void relaxSpinLockProducer() {
-    for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
+void relaxSpinLockProducer(unsigned nEvents) {
+    for (unsigned i=0; i<nEvents; i++) {
         producingRelaxSpinLock.lock();
         producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumingRelaxSpinLock.unlock();
     }
+}
+
+void relaxSpinLockStop() {
     // ask consumers to stop & wait for them
     producingRelaxSpinLock.lock();
     stopConsumers.store(true, std::memory_order_release);
@@ -156,13 +175,16 @@ void relaxSpinLockConsumer() {
 }
 
 
-void busySpinLockProducer() {
-    for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
+void busySpinLockProducer(unsigned nEvents) {
+    for (unsigned i=0; i<nEvents; i++) {
         producingBusySpinLock.lock();
 //        DEBUG_PRODUCER
         producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumingBusySpinLock.unlock();
     }
+}
+
+void busySpinLockStop() {
     // ask consumers to stop & wait for them
     producingBusySpinLock.lock();
     stopConsumers.store(true, std::memory_order_release);
@@ -187,13 +209,31 @@ void busySpinLockConsumer() {
 }
 
 
-void busyWaitProducer() {
-    for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
-        while (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire)) ;     // the busy wait loop
-        producerCount.fetch_add(1, std::memory_order_acq_rel);
-//        DEBUG_PRODUCER
-
+void busyWaitProducer(unsigned nEvents) {
+    unsigned fuckCount;
+    for (unsigned i=0; i<nEvents; i++) {
+        //if (!(i%1000000)) DEBUG_PRODUCER
+        //if ( !(i%500'000) && (nEvents==4312000) ) DEBUG_PRODUCER
+        // loop until this thread can produce the next event (until it is the thread who could increase the counter)
+        unsigned currentProducerCount = producerCount.load(std::memory_order_acquire);
+        while (!producerCount.compare_exchange_weak(currentProducerCount, currentProducerCount+1,
+                                                    std::memory_order_release,
+                                                    std::memory_order_relaxed))
+            ;
+        // wait until the event is consumed before passing on to the next one -- remember we are measuring the latency, not the throughput
+        fuckCount = 0;
+        while (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire)) {
+            if (fuckCount++ > (1<<26)) {
+                DEBUG_PRODUCER
+                std::cout << "Exiting for fuckCount is " << fuckCount << "...\n";
+                exit(1);
+            }
+        }
     }
+
+}
+
+void busyWaitStop() {
     // ask consumers to stop & wait for them
     stopConsumers.store(true, std::memory_order_release);
     while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) ;
@@ -201,50 +241,106 @@ void busyWaitProducer() {
 
 void busyWaitConsumer() {
     numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
-    while ( (!stopConsumers.load(std::memory_order_acquire)) ||
-            (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire)) ) {
-        unsigned targetConsumerCount = producerCount.load(std::memory_order_acquire)-1;
-        consumerCount.compare_exchange_strong(targetConsumerCount, consumerCount.load(std::memory_order_acquire)+1);
+    while (!stopConsumers.load(std::memory_order_acquire)) {
+
+        unsigned currentConsumerCount = consumerCount.load(std::memory_order_acquire);
+
+        // is there a next event to be consumed already?
+        if (currentConsumerCount < producerCount.load(std::memory_order_acquire)) {
+
+            // try to consume it
+            if (consumerCount.compare_exchange_weak(currentConsumerCount, currentConsumerCount+1,
+                                                    std::memory_order_release,
+                                                    std::memory_order_relaxed)) {
+                // yeah! authorization to consume acquired (the counter was already increased)
+            }
+        }
     }
     numberOfActiveConsumers.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-void linearProducerConsumer() {
+void linearProducerConsumer(unsigned nEvents) {
     // simulates the work the others producers / consumers do: simply increase their counters
-    for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
+    for (unsigned i=0; i<nEvents; i++) {
         producerCount.fetch_add(1, std::memory_order_acq_rel);
         consumerCount.fetch_add(1, std::memory_order_acq_rel);
     }
+}
+
+
+#define STRINGFY(_str)  #_str
+#define PERFORM_MEASUREMENT(_strategyNumber, _producerFunction, _consumerFunction, _stopFunction) \
+        performMeasurement(_strategyNumber,                                \
+                           _producerFunction, STRINGFY(_producerFunction), \
+                           _consumerFunction, STRINGFY(_consumerFunction), \
+                           _stopFunction,     STRINGFY(_stopFunction) )
+template <typename _ProducerFunction, typename _ConsumerFunction, typename _StopFunction>
+void performMeasurement(unsigned strategyNumber,
+                        _ProducerFunction producerFunction, string producerFunctionName,
+                        _ConsumerFunction consumerFunction, string consumerFunctionName,
+                        _StopFunction         stopFunction, string stopFunctionName) {
+
+    std::cout << "\n\nStaring the STRATEGY #" << strategyNumber << " measurements: '" << producerFunctionName << "' / '" << consumerFunctionName << "':\n";
+    std::cout << "\tnTest; nProducers; nConsumers;    nEvents   -->   (  tEvent;         tTotal  ):\n" << std::flush;
+    for (unsigned nTest=0; nTest<N_TESTS_PER_STRATEGY; nTest++) {
+        unsigned nProducers = N_PRODUCERS_CONSUMERS[nTest][0];
+        unsigned nConsumers = N_PRODUCERS_CONSUMERS[nTest][1];
+        unsigned nEvents    = BASE_NUMBER_OF_EVENTS * N_EVENTS_FACTOR[nTest] * STRATEGY_FACTOR[strategyNumber];
+        std::thread consumerThreads[nConsumers];
+        std::thread producerThreads[nProducers];
+        unsigned long long start;
+        unsigned long long elapsed;
+
+        reset();
+
+        std::cout << "\t" <<
+                  PAD(nTest,      5)  << "; " <<
+                  PAD(nProducers, 10) << "; " <<
+                  PAD(nConsumers, 10) << "; " <<
+                  PAD(nEvents,    10) << "   -->   " << std::flush;
+
+        // start the consumers
+        for (unsigned threadNumber=0; threadNumber<nConsumers; threadNumber++) {
+            consumerThreads[threadNumber] = std::thread(consumerFunction);
+        }
+        // start the producers
+        start = getMonotonicRealTimeNS();
+        for (unsigned threadNumber=0; threadNumber<nProducers; threadNumber++) {
+            producerThreads[threadNumber] = std::thread(producerFunction, nEvents/nProducers);
+        }
+        // wait for the producers
+        for (int threadNumber=0; threadNumber<nProducers; threadNumber++) {
+            producerThreads[threadNumber].join();
+        }
+        elapsed = getMonotonicRealTimeNS() - start;
+        stopFunction();
+        // wait for the consumers
+        for (int threadNumber=0; threadNumber<nConsumers; threadNumber++) {
+            consumerThreads[threadNumber].join();
+        }
+        check(nEvents);
+        unsigned tEvent = elapsed / nEvents;    // ns per event
+        std::cout << "(" <<
+                     PAD(tEvent, 6)   << "ns; " <<
+                     PAD(elapsed, 14) << "ns)" <<
+                     (nTest < N_TESTS_PER_STRATEGY-1 ? ",\n":".\n") << std::flush;
+    }
+    std::cout << "\n";
 }
 
 int main(void) {
 
 	std::cout << DOCS;
 
-    unsigned long long start;
-    unsigned long long elapsed;
-
-    std::thread threads[N_THREADS];
-
     // formatted output
     std::cout.imbue(std::locale(""));
 
+    PERFORM_MEASUREMENT(0,         mutexProducer,         mutexConsumer,         mutexStop);
+    PERFORM_MEASUREMENT(1, relaxSpinLockProducer, relaxSpinLockConsumer, relaxSpinLockStop);
+    PERFORM_MEASUREMENT(2,  busySpinLockProducer,  busySpinLockConsumer,  busySpinLockStop);
+    PERFORM_MEASUREMENT(3,      busyWaitProducer,      busyWaitConsumer,      busyWaitStop);
 
-    std::cout << "\n\nStaring the 'mutexProducer' / 'mutexConsumer' measurements: " << std::flush;
-    reset();
-	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-		threads[_threadNumber] = std::thread(mutexConsumer);
-	}
-    start = getMonotonicRealTimeNS();
-    mutexProducer();
-    elapsed = getMonotonicRealTimeNS() - start;
-    for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-        threads[_threadNumber].join();
-    }
-    std::cout << PAD(elapsed, 6) << "ns\n";
-    check(elapsed);
-
-
+/*
     std::cout << "\n\nStaring the 'relaxSpinLockProducer' / 'relaxSpinLockConsumer' measurements: " << std::flush;
     reset();
 	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
@@ -289,15 +385,22 @@ int main(void) {
     std::cout << PAD(elapsed, 6) << "ns\n";
     check(elapsed);
 
+*/
 
-    std::cout << "\n\nStaring the 'linearProducerConsumer' (no threads) measurements: " << std::flush;
+    unsigned long long start;
+    unsigned long long elapsed;
+
+    std::cout << "\n\nStaring the 'linearProducerConsumer' (no threads) measurements:\n";
+    std::cout << "\t(tEvent, nEvents, tTotal): " << std::flush;
     reset();
+    unsigned nEvents = BASE_NUMBER_OF_EVENTS * STRATEGY_FACTOR[4];   // 4 is the STRATEGY_NUMBER for linearProducerConsumer
     start = getMonotonicRealTimeNS();
-    linearProducerConsumer();
+    linearProducerConsumer(nEvents);
     elapsed = getMonotonicRealTimeNS() - start;
     std::cout << PAD(elapsed, 6) << "ns\n";
-    check(elapsed);
-
+    check(nEvents);
+    unsigned tEvent = elapsed / nEvents;    // ns per event
+    std::cout << "(" << PAD(tEvent, 3) << "ns, " << PAD(nEvents, 6) << ", " << PAD(elapsed, 6) << "ns).\n\n" << std::flush;
 
     start = getMonotonicRealTimeNS();
     elapsed = getMonotonicRealTimeNS() - start;
