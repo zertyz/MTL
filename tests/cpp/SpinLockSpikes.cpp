@@ -34,13 +34,13 @@
 constexpr unsigned N_PRODUCERS_CONSUMERS[][2]   = {{1,1}, {1,10}, {1,100}, {2,1}, {2,10}, {2,100}, {4,1}, {4,10}, {4,100}};
 
 /** 'N_EVENTS_FACTOR[nTest] * BASE_NUMBER_OF_EVENTS' specifyes the number of events to run for each 'N_PRODUCERS_CONSUMERS[nTest]' pair */
-constexpr unsigned N_EVENTS_FACTOR[]            = {  400,     40,      4,   200,      20,       2,   100,     10,       1};
+constexpr unsigned N_EVENTS_FACTOR[]            = {   40,     20,       4,    20,     20,       2,    20,     10,       1};
 constexpr unsigned N_TESTS_PER_STRATEGY         = sizeof(N_PRODUCERS_CONSUMERS)/sizeof(N_PRODUCERS_CONSUMERS[0]);
 static_assert(N_TESTS_PER_STRATEGY == sizeof(N_EVENTS_FACTOR)/sizeof(N_EVENTS_FACTOR[0]),
               "'N_PRODUCERS_CONSUMERS' and 'N_EVENTS_FACTOR' must be of the same length");
 
 /** Multiplication factor for each algorithm:     {mutex, relaxed spin-lock, busy spin-lock, busy wait, linear} */
-constexpr unsigned STRATEGY_FACTOR[]            = {    1,                10,             10,        10,    1000};
+constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,            100,       100,    1000};
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
