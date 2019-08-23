@@ -31,16 +31,16 @@
 
 /** N_PRODUCERS_CONSUMERS := {{nProducers1, nConsumers1}, {nProducers2, nConsumers2}, ...}
     where 1, 2, ... correspond to 'nTest' -- the test number to perform */
-constexpr unsigned N_PRODUCERS_CONSUMERS[][2]   = {{1,1}, {1,10}, {1,100}, {2,1}, {2,10}, {2,100}, {4,1}, {4,10}, {4,100}};
+constexpr unsigned N_PRODUCERS_CONSUMERS[][2]   = {{1,1}, {1,10}, {1,100}, {2,1}, {2,10}, {2,100}, {4,1}, {4,10}, {4,100}, {8,1}, {8,10}, {8,100}};
 
 /** 'N_EVENTS_FACTOR[nTest] * BASE_NUMBER_OF_EVENTS' specifyes the number of events to run for each 'N_PRODUCERS_CONSUMERS[nTest]' pair */
-constexpr unsigned N_EVENTS_FACTOR[]            = {   40,     20,       4,    20,     20,       2,    20,     10,       1};
+constexpr unsigned N_EVENTS_FACTOR[]            = {   40,     20,       4,    20,     20,       2,    20,     10,       1,    10,     5,        1};
 constexpr unsigned N_TESTS_PER_STRATEGY         = sizeof(N_PRODUCERS_CONSUMERS)/sizeof(N_PRODUCERS_CONSUMERS[0]);
 static_assert(N_TESTS_PER_STRATEGY == sizeof(N_EVENTS_FACTOR)/sizeof(N_EVENTS_FACTOR[0]),
               "'N_PRODUCERS_CONSUMERS' and 'N_EVENTS_FACTOR' must be of the same length");
 
-/** Multiplication factor for each algorithm:     {mutex, relaxed spin-lock, busy spin-lock, busy wait, linear} */
-constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,            100,       100,    1000};
+/** Multiplication factor for each algorithm:     {mutex, relaxed spin-lock, busy spin-lock, relaxed atomic, busy atomic, linear} */
+constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,            100,            100,         100,   1000};
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -209,37 +209,31 @@ void busySpinLockConsumer() {
 }
 
 
-void busyWaitProducer(unsigned nEvents) {
-    unsigned fuckCount;
+#include <boost/fiber/detail/cpu_relax.hpp>     // provides cpu_relax() macro, which uses the x86's "pause" or arm's "yield" instructions
+
+void relaxAtomicProducer(unsigned nEvents) {
     for (unsigned i=0; i<nEvents; i++) {
-        //if (!(i%1000000)) DEBUG_PRODUCER
-        //if ( !(i%500'000) && (nEvents==4312000) ) DEBUG_PRODUCER
-        // loop until this thread can produce the next event (until it is the thread who could increase the counter)
         unsigned currentProducerCount = producerCount.load(std::memory_order_acquire);
         while (!producerCount.compare_exchange_weak(currentProducerCount, currentProducerCount+1,
                                                     std::memory_order_release,
-                                                    std::memory_order_relaxed))
-            ;
+                                                    std::memory_order_relaxed)) {
+            cpu_relax();
+        }
         // wait until the event is consumed before passing on to the next one -- remember we are measuring the latency, not the throughput
-        fuckCount = 0;
         while (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire)) {
-            if (fuckCount++ > (1<<26)) {
-                DEBUG_PRODUCER
-                std::cout << "Exiting for fuckCount is " << fuckCount << "...\n";
-                exit(1);
-            }
+            cpu_relax();
         }
     }
 
 }
 
-void busyWaitStop() {
+void relaxAtomicStop() {
     // ask consumers to stop & wait for them
     stopConsumers.store(true, std::memory_order_release);
     while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) ;
 }
 
-void busyWaitConsumer() {
+void relaxAtomicConsumer() {
     numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
     while (!stopConsumers.load(std::memory_order_acquire)) {
 
@@ -253,11 +247,60 @@ void busyWaitConsumer() {
                                                     std::memory_order_release,
                                                     std::memory_order_relaxed)) {
                 // yeah! authorization to consume acquired (the counter was already increased)
+            } else {
+                cpu_relax();
             }
         }
     }
     numberOfActiveConsumers.fetch_sub(1, std::memory_order_acq_rel);
 }
+
+
+void busyAtomicProducer(unsigned nEvents) {
+    for (unsigned i=0; i<nEvents; i++) {
+        //if (!(i%1000000)) DEBUG_PRODUCER
+        //if ( !(i%500'000) && (nEvents==4312000) ) DEBUG_PRODUCER
+        // loop until this thread can produce the next event (until it is the thread who could increase the counter)
+        unsigned currentProducerCount = producerCount.load(std::memory_order_acquire);
+        while (!producerCount.compare_exchange_weak(currentProducerCount, currentProducerCount+1,
+                                                    std::memory_order_release,
+                                                    std::memory_order_relaxed))
+            ;
+        // wait until the event is consumed before passing on to the next one -- remember we are measuring the latency, not the throughput
+        while (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire))
+            ;
+    }
+
+}
+
+void busyAtomicStop() {
+    // ask consumers to stop & wait for them
+    stopConsumers.store(true, std::memory_order_release);
+    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) ;
+}
+
+void busyAtomicConsumer() {
+    numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
+    while (!stopConsumers.load(std::memory_order_acquire)) {
+
+        unsigned currentConsumerCount = consumerCount.load(std::memory_order_acquire);
+
+        // is there a next event to be consumed already?
+        if (currentConsumerCount < producerCount.load(std::memory_order_acquire)) {
+
+            // try to consume it
+            if (consumerCount.compare_exchange_weak(currentConsumerCount, currentConsumerCount+1,
+                                                    std::memory_order_release,
+                                                    std::memory_order_relaxed)) {
+                // yeah! authorization to consume acquired (the counter was already increased)
+            } else {
+                ;   // we were not the one to consume the event yet
+            }
+        }
+    }
+    numberOfActiveConsumers.fetch_sub(1, std::memory_order_acq_rel);
+}
+
 
 void linearProducerConsumer(unsigned nEvents) {
     // simulates the work the others producers / consumers do: simply increase their counters
@@ -338,7 +381,8 @@ int main(void) {
     PERFORM_MEASUREMENT(0,         mutexProducer,         mutexConsumer,         mutexStop);
     PERFORM_MEASUREMENT(1, relaxSpinLockProducer, relaxSpinLockConsumer, relaxSpinLockStop);
     PERFORM_MEASUREMENT(2,  busySpinLockProducer,  busySpinLockConsumer,  busySpinLockStop);
-    PERFORM_MEASUREMENT(3,      busyWaitProducer,      busyWaitConsumer,      busyWaitStop);
+    PERFORM_MEASUREMENT(3,   relaxAtomicProducer,   relaxAtomicConsumer,   relaxAtomicStop);
+    PERFORM_MEASUREMENT(4,    busyAtomicProducer,    busyAtomicConsumer,    busyAtomicStop);
 
 /*
     std::cout << "\n\nStaring the 'relaxSpinLockProducer' / 'relaxSpinLockConsumer' measurements: " << std::flush;
@@ -371,13 +415,13 @@ int main(void) {
     check(elapsed);
 
 
-    std::cout << "\n\nStaring the 'busyWaitProducer' / 'busyWaitConsumer' measurements: " << std::flush;
+    std::cout << "\n\nStaring the 'busyAtomicProducer' / 'busyAtomicConsumer' measurements: " << std::flush;
     reset();
 	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-		threads[_threadNumber] = std::thread(busyWaitConsumer);
+		threads[_threadNumber] = std::thread(busyAtomicConsumer);
 	}
     start = getMonotonicRealTimeNS();
-    busyWaitProducer();
+    busyAtomicProducer();
     elapsed = getMonotonicRealTimeNS() - start;
     for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
         threads[_threadNumber].join();
