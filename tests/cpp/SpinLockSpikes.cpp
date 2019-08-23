@@ -25,13 +25,17 @@
              "      for how fast can our hardware do.\n"
 
 
-#define NUMBER_OF_EVENTS_PER_MEASURE 1234567
+#define NUMBER_OF_EVENTS_PER_MEASURE 2143657
 #define N_THREADS                    (std::thread::hardware_concurrency()-1)    // remember we have 1 thread for the consumer
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
 #define PAD(_number, _width)         std::setfill(' ') << std::setw(_width) << std::fixed << (_number)
+
+
+#define DEBUG_PRODUCER     std::this_thread::sleep_for(std::chrono::milliseconds(1000)); \
+                           std::cerr << "produced="<<producerCount<<"; consumed="<<consumerCount<<std::endl;
 
 
 // test section
@@ -57,8 +61,11 @@ std::atomic_int  numberOfActiveConsumers = 0;
 std::mutex producingMutex;
 std::mutex consumingMutex;
 
-mutua::MTL::SpinLock producingSpinLock;
-mutua::MTL::SpinLock consumingSpinLock;
+mutua::MTL::SpinLock<true> producingRelaxSpinLock;
+mutua::MTL::SpinLock<true> consumingRelaxSpinLock;
+
+mutua::MTL::SpinLock<false> producingBusySpinLock;
+mutua::MTL::SpinLock<false> consumingBusySpinLock;
 
 // info section
 ///////////////
@@ -84,7 +91,8 @@ void reset() {
 
     // consumers have nothing to consume until a new event arrives...
     consumingMutex.try_lock();
-    consumingSpinLock.try_lock();
+    consumingRelaxSpinLock.try_lock();
+    consumingBusySpinLock.try_lock();
 }
 
 
@@ -118,31 +126,62 @@ void mutexConsumer() {
 }
 
 
-void spinLockProducer() {
+void relaxSpinLockProducer() {
     for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
-        producingSpinLock.lock();
+        producingRelaxSpinLock.lock();
         producerCount.fetch_add(1, std::memory_order_acq_rel);
-        consumingSpinLock.unlock();
+        consumingRelaxSpinLock.unlock();
     }
     // ask consumers to stop & wait for them
-    producingSpinLock.lock();
+    producingRelaxSpinLock.lock();
     stopConsumers.store(true, std::memory_order_release);
-    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) consumingSpinLock.unlock();
-    producingSpinLock.unlock();
+    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) consumingRelaxSpinLock.unlock();
+    producingRelaxSpinLock.unlock();
 }
 
-void spinLockConsumer() {
+void relaxSpinLockConsumer() {
     numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
     while (true) {
-        consumingSpinLock.lock();
+        consumingRelaxSpinLock.lock();
 
         if (unlikely (stopConsumers.load(std::memory_order_acquire)) ) {
-            consumingSpinLock.unlock();
+            consumingRelaxSpinLock.unlock();
             break;
         }
 
         consumerCount.fetch_add(1, std::memory_order_acq_rel);
-        producingSpinLock.unlock();
+        producingRelaxSpinLock.unlock();
+    }
+    numberOfActiveConsumers.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+
+void busySpinLockProducer() {
+    for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
+        producingBusySpinLock.lock();
+//        DEBUG_PRODUCER
+        producerCount.fetch_add(1, std::memory_order_acq_rel);
+        consumingBusySpinLock.unlock();
+    }
+    // ask consumers to stop & wait for them
+    producingBusySpinLock.lock();
+    stopConsumers.store(true, std::memory_order_release);
+    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) consumingBusySpinLock.unlock();
+    producingBusySpinLock.unlock();
+}
+
+void busySpinLockConsumer() {
+    numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
+    while (true) {
+        consumingBusySpinLock.lock();
+
+        if (unlikely (stopConsumers.load(std::memory_order_acquire)) ) {
+            consumingBusySpinLock.unlock();
+            break;
+        }
+
+        consumerCount.fetch_add(1, std::memory_order_acq_rel);
+        producingBusySpinLock.unlock();
     }
     numberOfActiveConsumers.fetch_sub(1, std::memory_order_acq_rel);
 }
@@ -152,8 +191,7 @@ void busyWaitProducer() {
     for (unsigned i=0; i<NUMBER_OF_EVENTS_PER_MEASURE; i++) {
         while (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire)) ;     // the busy wait loop
         producerCount.fetch_add(1, std::memory_order_acq_rel);
-//        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-//        std::cerr << "produced="<<producerCount<<"; consumed="<<consumerCount<<std::endl;
+//        DEBUG_PRODUCER
 
     }
     // ask consumers to stop & wait for them
@@ -207,13 +245,28 @@ int main(void) {
     check(elapsed);
 
 
-    std::cout << "\n\nStaring the 'spinLockProducer' / 'spinLockConsumer' measurements: " << std::flush;
+    std::cout << "\n\nStaring the 'relaxSpinLockProducer' / 'relaxSpinLockConsumer' measurements: " << std::flush;
     reset();
 	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-		threads[_threadNumber] = std::thread(spinLockConsumer);
+		threads[_threadNumber] = std::thread(relaxSpinLockConsumer);
 	}
     start = getMonotonicRealTimeNS();
-    spinLockProducer();
+    relaxSpinLockProducer();
+    elapsed = getMonotonicRealTimeNS() - start;
+    for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
+        threads[_threadNumber].join();
+    }
+    std::cout << PAD(elapsed, 6) << "ns\n";
+    check(elapsed);
+
+
+    std::cout << "\n\nStaring the 'busySpinLockProducer' / 'busySpinLockConsumer' measurements: " << std::flush;
+    reset();
+	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
+		threads[_threadNumber] = std::thread(busySpinLockConsumer);
+	}
+    start = getMonotonicRealTimeNS();
+    busySpinLockProducer();
     elapsed = getMonotonicRealTimeNS() - start;
     for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
         threads[_threadNumber].join();

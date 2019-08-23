@@ -24,13 +24,20 @@ namespace mutua::MTL {
      * since it does not cause a contex-switch.
      *
     */
-    struct SpinLock {
+    template<bool _useRelaxInstruction=true>
+    class SpinLock {
+
         std::atomic_flag flag = ATOMIC_FLAG_INIT;
-        std::mutex m;
+
+    public:
+
         inline void lock() {
             // acquire lock
-            while (flag.test_and_set(std::memory_order_relaxed))  { 
-                cpu_relax();    // calls PAUSE or YIELD instruction, releasing the core to another CPU without context switching
+            while (flag.test_and_set(std::memory_order_relaxed))  {
+                if constexpr (_useRelaxInstruction) {
+                    cpu_relax();    // calls PAUSE or YIELD instruction, releasing the core to another CPU without context switching
+                }
+                // else just do a normal busy wait
             }
         }
         inline bool try_lock() {
@@ -42,14 +49,14 @@ namespace mutua::MTL {
 
         template <typename _type>
         inline bool non_atomic_compare_exchange(_type& val, _type& old_val, _type new_val) {
-            m.lock();
+            lock();
             if (val == old_val) {
                 val = new_val;
-                m.unlock();
+                unlock();
                 return true;
             } else {
                 old_val = val;
-                m.unlock();
+                unlock();
                 return false;
             }
         }
