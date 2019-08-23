@@ -11,54 +11,46 @@ using namespace std;
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
-//#include <xmmintrin.h>
-namespace mutua::MTL {
-    struct SpinLock {
-        std::atomic_flag flag = ATOMIC_FLAG_INIT;
-        std::mutex m;
-        inline void lock() {
-            // acquire lock
-            while (flag.test_and_set(std::memory_order_acquire))  { 
-//                _mm_pause();    // yields a PAUSE instruction -- release the processor without context switching
-            }
-        }
-        inline bool try_lock() {
-            return !flag.test_and_set(std::memory_order_acquire);
-        }
-        inline void unlock() {
-            flag.clear(std::memory_order_release);
-        }
-
-        template <typename _primitive>
-        inline bool _compare_exchange(atomic<_primitive>& val, _primitive& old_val, _primitive new_val) {
-            //lock();
-            m.lock();
-            _primitive _val = val.load(memory_order_relaxed);
-            if (_val == old_val) {
-                val.store(new_val, memory_order_release);
-                m.unlock();
-                return true;
-            } else {
-                old_val = _val;
-                m.unlock();
-                return false;
-            }
-        }
-    };
-}
 
 namespace mutua::MTL::stack {
+
+    struct UnorderedArrayBasedReentrantStackNext {
+        atomic<unsigned> next;          // the 64-byte alignment requirement is guaranteed by 'UnorderedArrayBasedReentrantStackSlot'
+    };
+
+    /** Struct used to define backing arrays for 'UnorderedArrayBasedReentrantStack'. Example:
+     *      struct UserSlot { ... };
+     *      typedef mutua::MTL::stack::UnorderedArrayBasedReentrantStackSlot<UserSlot> StackSlot;
+     *      StackSlot backingArray[N_ELEMENTS]; */ 
+    template <typename _UserSlot>
+    struct alignas(64) UnorderedArrayBasedReentrantStackSlot: public UnorderedArrayBasedReentrantStackNext, _UserSlot {};
+    // the struct above, empty but inheriting from 'UnorderedArrayBasedReentrantStackNext' and '_UserSlot',
+    // is used to guarantee the order of the fields. The 'next' pointer will be the first and the whole
+    // structure is aligned at 64 bytes, to prevent false-sharing performance degradation.
+
+
+
     /**
      * UnorderedArrayBasedReentrantStack.hpp
      * =====================================
      * created by luiz, Aug 18, 2019
      *
      * Provides a stack with the following attributes:
-     *   - Mutex-free (we use std::atomic pointers) but fully reentrant -- multiple threads may push and pop simultaneously
-     *   - All slots are members of a provided array
-     *   - Stack entries are "unordered" -- they may be added in any order, independent from the array's natural element order
-     *     (this implies that the stack entries must have an "int next" field, serving as a pointer to the next stack member;
-     *      this pointer should be declared with 'alignas(64)' to prevent false-sharing performance degradation)
+     *   - Lock-free (no mutexes or spin locks) yet fully reentrant -- multiple threads may push and pop simultaneously
+     *   - All slots are members of a provided array -- the whole structure may be "mmap-ped"
+     *   - Stack entries are "unordered" -- they may be added in any order, independent from the array's natural element order.
+     *     This implies that the stack entries must have an "unsigned next" field, serving as a pointer to the next stack member:
+     *         alignas(64) atomic<unsigned> next;       // 'alignas(64)' prevents false-sharing performance degradation.
+     * 
+     * Usage example:
+     * 
+     *      struct UserSlot { ... };
+     *      typedef mutua::MTL::stack::UnorderedArrayBasedReentrantStackSlot<UserSlot> StackSlot;
+     *      StackSlot backingArray[N_ELEMENTS];
+     * 
+     *      mutua::MTL::stack::UnorderedArrayBasedReentrantStack<StackSlot, N_ELEMENTS, true, true, true> stack(backingArray);
+     * 
+     *      
      *
     */
     template <typename _BackingArrayElementType, unsigned _BackingArrayLength,
@@ -94,8 +86,6 @@ namespace mutua::MTL::stack {
 
         // debug
         string                              stackName;
-//mutex                     m;
-mutua::MTL::SpinLock     m;
 
 
         /** initiates a stack manipulation object, receiving as argument a pointer to the pre-allocated
@@ -127,7 +117,7 @@ mutua::MTL::SpinLock     m;
 
         /** pushes into the stack one of the elements of the 'backingArray',
          *  returning a pointer to that element */
-        inline _BackingArrayElementType* push(unsigned elementId) {
+        inline void push(unsigned elementId) {
 
             _BackingArrayElementType* elementSlot = &(backingArray[elementId]);
 
@@ -163,8 +153,6 @@ mutua::MTL::SpinLock     m;
                 pushCount.fetch_add(1, memory_order_relaxed);
             }
 
-            return elementSlot;
-
         }
 
         /** pops the head of the stack -- returning a pointer to one of the elements of the 'backingArray'.
@@ -195,8 +183,6 @@ mutua::MTL::SpinLock     m;
                 // if CAS is to succeed, 'nextHead.ptr' should be the same as 'currentHead.next'. Let's check:
                 nextHead.ptr = (*headSlot)->next.load(memory_order_relaxed);
                 if (nextHead.ptr != currentHead.next) {
-//std::cout << "--> exiting because nextHead.ptr != currentHead.next: " << nextHead.ptr << " != " << currentHead.next << "\n";
-//exit(1);
                     // head->next has changed. No need for a CAS operation, since it will fail. Let's loop again and try one more time...
                     if constexpr (_ColMetrics) {    // account for the collision metrics
                         popCollisions.fetch_add(1, memory_order_relaxed);

@@ -42,6 +42,33 @@ static inline unsigned long long getMonotonicRealTimeNS() {
 }
 
 
+// spike vars
+/////////////
+
+// the types
+struct UserSlot {
+    unsigned  taskId;
+    unsigned  nSqrt;
+    double    n;
+    char c[63-2-20];
+};
+typedef mutua::MTL::stack::UnorderedArrayBasedReentrantStackSlot<UserSlot> StackSlot;
+
+// the backing array
+StackSlot backingArray[N_ELEMENTS];
+
+// the stacks
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<StackSlot, N_ELEMENTS, true, true, true> stack(backingArray);
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<StackSlot, N_ELEMENTS, true, true, true> usedStack(backingArray);
+mutua::MTL::stack::UnorderedArrayBasedReentrantStack<StackSlot, N_ELEMENTS, true, true, true> freeStack(backingArray);
+
+void populateFreeStack() {
+    for (unsigned i=0; i<N_ELEMENTS; i++) {
+        freeStack.push(i);
+    }
+}
+
+
 // info section
 ///////////////
 struct DoubleIntStruct {
@@ -52,51 +79,19 @@ void printHardwareInfo() {
     std::atomic<unsigned>        a_int;
     std::atomic<DoubleIntStruct> a_DoubleIntStruct;
     std::cout << "For this hardware:\n"
-              << std::boolalpha
-              << "\tis std::atomic<int> lock free?                    : "  << std::atomic_is_lock_free(&a_int) << '\n'
-              << "\tis std::atomic<struct{int,int}> lock free?        : "  << std::atomic_is_lock_free(&a_DoubleIntStruct) << '\n'
-              << "\tstd::atomic<int>::is_always_lock_free             : "  << std::atomic<unsigned>::is_always_lock_free << '\n'
-              << "\tstd::atomic<struct{int,int}>::is_always_lock_free : "  << std::atomic<DoubleIntStruct>::is_always_lock_free << '\n'
+              << std::boolalpha <<
+                 "\tis std::atomic<int> lock free?                    : "  << std::atomic_is_lock_free(&a_int) << "\n"
+                 "\tis std::atomic<struct{int,int}> lock free?        : "  << std::atomic_is_lock_free(&a_DoubleIntStruct) << "\n"
+                 "\tstd::atomic<int>::is_always_lock_free             : "  << std::atomic<unsigned>::is_always_lock_free << "\n"
+                 "\tstd::atomic<struct{int,int}>::is_always_lock_free : "  << std::atomic<DoubleIntStruct>::is_always_lock_free << "\n\n"
     ;
-}
-
-
-// spike vars
-/////////////
-
-std::mutex m;
-
-struct MyStruct {
-    unsigned                     taskId;
-    unsigned                     nSqrt;
-    double                       n;
-};
-template <typename _OriginalStruct>
-struct StackElement {
-    // when we can implement a lock free stack, maybe an atomic pointer will be needed
-    alignas(64) atomic<unsigned> next;
-    //unsigned         next;
-    _OriginalStruct  original;
-};
-typedef StackElement<MyStruct> MyStackElement;
-
-// the stacks
-MyStackElement         backingArray[N_ELEMENTS];
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> stack(backingArray);
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> usedStack(backingArray);
-mutua::MTL::stack::UnorderedArrayBasedReentrantStack<MyStackElement, N_ELEMENTS, true, true, true> freeStack(backingArray);
-
-void populateFreeStack() {
-    for (unsigned i=0; i<N_ELEMENTS; i++) {
-        freeStack.push(i);
-    }
 }
 
 template<typename _StackType, typename _debug>
 void dumpStack(_StackType& stack, unsigned expected, string listName, _debug debug) {
     if (debug) std::cout << "Checking list '"<<listName<<"'..." << std::flush;
     unsigned count=0;
-    MyStackElement* stackEntry;
+    StackSlot* stackEntry;
     while (true && (count <= (N_ELEMENTS*2))) {
         unsigned poppedId = stack.pop(&stackEntry);
         if (stackEntry == nullptr) {
@@ -136,8 +131,8 @@ std::atomic<unsigned> errorsCount(0);
 std::atomic<unsigned> runningThreads(0);
 void backAndForth(unsigned threadNumber, unsigned taskId) {
 
-    MyStackElement* stackEntry;
-    MyStruct* myData;
+    StackSlot* stackEntry;
+    UserSlot* myData;
     unsigned poppedId;
 
     for (unsigned i=0; i<BATCH; i++) {
@@ -151,7 +146,8 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
             niceExit(1);
         }
 
-        myData = &(stackEntry->original);
+        //myData = &(stackEntry->userSlot);
+        myData = stackEntry;
 
         // this section will probably need to be surrounded by a lock
         // once we manage to make the stack lock-free
@@ -175,7 +171,8 @@ void backAndForth(unsigned threadNumber, unsigned taskId) {
             niceExit(1);
         }
 
-        myData = &(stackEntry->original);
+        //myData = &(stackEntry->userSlot);
+        myData = stackEntry;
 
         // this section will probably need to be surrounded by a lock
         // once we manage to make the stack lock-free
@@ -198,28 +195,27 @@ int main(void) {
 	std::cout << DOCS;
 
     printHardwareInfo();
-
+ 
     std::cout << "\n\nStaring the simple tests:\n";
     int anagram[] = {1,2,3,4,4,3,2,1};
     constexpr int anagram_length = sizeof(anagram)/sizeof(anagram[0]);
 
     for (int i=1010; i<1010+anagram_length; i++) {
         std::cout << "Populating and pushing array element #" << i << " (stackHead is now " << stack.getStackHead() << ")...";
-        MyStackElement* stackEntry = stack.push(i);
-        MyStruct& myData = stackEntry->original;
-        myData.nSqrt = anagram[i-1010];
-        myData.n     = anagram[i-1010]*anagram[i-1010];
+        backingArray[i].nSqrt = anagram[i-1010];
+        backingArray[i].n     = anagram[i-1010]*anagram[i-1010];
+        stack.push(i);
         std::cout << " OK\n";
     }
 
     // dump the array
     for (int i=1010; i<1010+anagram_length; i++) {
-        std::cout << "backingArray["<<i<<"](next, nSqrt) == {" << backingArray[i].next << ", " << backingArray[i].original.nSqrt << "},\n";
+        std::cout << "backingArray["<<i<<"](next, nSqrt) == {" << backingArray[i].next << ", " << backingArray[i].nSqrt << "},\n";
     }
     std::cout << "stackHead = " << stack.getStackHead() << "; stackHead->next = " << stack.getStackHeadNext() << "\n";
 
     while (true) {
-        MyStackElement* stackEntry;
+        StackSlot* stackEntry;
         unsigned poppedId = stack.pop(&stackEntry);
         if (stackEntry == nullptr) {
             std::cout << "... end reached\n";
@@ -229,8 +225,9 @@ int main(void) {
             break;
         }
         std::cout << "Popped array element #" << poppedId << "...";
-        MyStruct& myData = stackEntry->original;
-        std::cout << ": nSqrt=" << myData.nSqrt << "\n";
+        //UserSlot& myData = stackEntry->userSlot;
+        UserSlot* myData = stackEntry;
+        std::cout << ": nSqrt=" << myData->nSqrt << "\n";
     }
 
     std::cout << "\n\nStaring the multithreaded tests:\n";
