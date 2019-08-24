@@ -27,20 +27,20 @@
 
 /** This number will get multiplyed by a function of consumer and producer threads
     and also the lock algorithm to give the total number of events to be processed */
-#define BASE_NUMBER_OF_EVENTS 4312      // must be divisible by each number of consumers used
+#define BASE_NUMBER_OF_EVENTS 4320      // must be divisible by each number in 'N_PRODUCERS_CONSUMERS'
 
 /** N_PRODUCERS_CONSUMERS := {{nProducers1, nConsumers1}, {nProducers2, nConsumers2}, ...}
     where 1, 2, ... correspond to 'nTest' -- the test number to perform */
-constexpr unsigned N_PRODUCERS_CONSUMERS[][2]   = {{1,1}, {1,10}, {1,100}, {2,1}, {2,10}, {2,100}, {4,1}, {4,10}, {4,100}, {8,1}, {8,10}, {8,100}};
+constexpr unsigned N_PRODUCERS_CONSUMERS[][2]   = {{1,1}, {1,2}, {1,4}, {1,16}, {2,1}, {2,2}, {2,4}, {2,16}, {4,1}, {4,2}, {4,4}, {4,16}, {16,1}, {16,2}, {16,4}, {16,16}};
 
 /** 'N_EVENTS_FACTOR[nTest] * BASE_NUMBER_OF_EVENTS' specifyes the number of events to run for each 'N_PRODUCERS_CONSUMERS[nTest]' pair */
-constexpr unsigned N_EVENTS_FACTOR[]            = {   40,     20,       4,    20,     20,       2,    20,     10,       1,    10,     5,        1};
+constexpr unsigned N_EVENTS_FACTOR[]            = {   80,    40,    20,      5,    40,    20,    10,      3,    20,    10,     5,      2,      5,      4,      4,       1};
 constexpr unsigned N_TESTS_PER_STRATEGY         = sizeof(N_PRODUCERS_CONSUMERS)/sizeof(N_PRODUCERS_CONSUMERS[0]);
 static_assert(N_TESTS_PER_STRATEGY == sizeof(N_EVENTS_FACTOR)/sizeof(N_EVENTS_FACTOR[0]),
               "'N_PRODUCERS_CONSUMERS' and 'N_EVENTS_FACTOR' must be of the same length");
 
 /** Multiplication factor for each algorithm:     {mutex, relaxed spin-lock, busy spin-lock, relaxed atomic, busy atomic, linear} */
-constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,            100,            100,         100,   1000};
+constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,            100,            100,         100,   10000};
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -50,16 +50,6 @@ constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,    
 
 #define DEBUG_PRODUCER     {std::this_thread::sleep_for(std::chrono::milliseconds(1000)); \
                             std::cerr << "produced="<<producerCount<<"; consumed="<<consumerCount<<std::endl;}
-
-
-// test section
-///////////////
-
-static struct timespec timespec_now;
-static inline unsigned long long getMonotonicRealTimeNS() {
-    clock_gettime(CLOCK_MONOTONIC, &timespec_now);
-    return (timespec_now.tv_sec*1000000000ll) + timespec_now.tv_nsec;
-}
 
 
 // spike vars
@@ -81,8 +71,147 @@ mutua::MTL::SpinLock<true> consumingRelaxSpinLock;
 mutua::MTL::SpinLock<false> producingBusySpinLock;
 mutua::MTL::SpinLock<false> consumingBusySpinLock;
 
+
 // info section
 ///////////////
+
+#include <cpuid.h>
+void printInfo() {
+
+    string compilerVersion;
+    if (strstr(__VERSION__, "Clang") == nullptr) {
+        compilerVersion = "gcc " __VERSION__;
+    } else {
+        compilerVersion = __VERSION__;
+    }
+
+    std::cout << "Info:\n"
+                 "\tCompiler & Version :  " << compilerVersion << "\n"
+                 "\tOS                 :  " <<
+
+                #ifdef _WIN32
+                "Windows 32-bit"
+                #elif _WIN64
+                "Windows 64-bit"
+                #elif __linux__
+                "Linux"
+                #elif __FreeBSD__
+                "FreeBSD"
+                #elif __APPLE__ || __MACH__
+                "Mac OSX"
+                #elif __unix || __unix__
+                "Unix"
+                #else
+                "Unknown"
+                #endif
+
+              << "\n" << std::flush;
+
+    char CPUBrandString[0x40];
+    unsigned int CPUInfo[4] = {0,0,0,0};
+
+    __cpuid(0x80000000, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
+    unsigned int nExIds = CPUInfo[0];
+
+    memset(CPUBrandString, 0, sizeof(CPUBrandString));
+
+    for (unsigned int i = 0x80000000; i <= nExIds; ++i) {
+        __cpuid(i, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
+
+        if (i == 0x80000002)
+            memcpy(CPUBrandString, CPUInfo, sizeof(CPUInfo));
+        else if (i == 0x80000003)
+            memcpy(CPUBrandString + 16, CPUInfo, sizeof(CPUInfo));
+        else if (i == 0x80000004)
+            memcpy(CPUBrandString + 32, CPUInfo, sizeof(CPUInfo));
+    }
+
+    std::cout << "\tCPU Type           :  " << CPUBrandString << std::endl << std::endl;
+}
+
+
+// math section
+///////////////
+#include <cmath>
+
+/** Returns the average exponential factor between the given numbers and the
+  * 'bias' -- how well they fit -- 1 being perfect fit */
+template <typename _Numeric>
+double getExponentiality(const _Numeric* dataPoints, unsigned nDataPoints, double& bias) {
+
+    // helper lambdas
+    auto computeLogs = [] (const auto* dataPoints, unsigned nDataPoints, double* logs) {
+        for (unsigned i=0; i<nDataPoints; i++) {
+            logs[i] = log(dataPoints[i]);
+        }
+    };
+    auto computeFactors = [](const double* dataPoints, unsigned nDataPoints, double* factors) {
+        for (unsigned i=0; i<(nDataPoints-1); i++) {
+            factors[i] = ((double)dataPoints[i+1])/((double)dataPoints[i]);
+        }
+    };
+    auto computeAverage = [](const double* values, unsigned nValues) -> double {
+        double sum = 0;
+        for (unsigned i=0; i<nValues; i++) {
+            sum += values[i];
+        }
+        return sum / ((double)nValues);
+    };
+
+    // logs:                  local _a,_b,_c,_d=math.log(a),math.log(b),math.log(c),math.log(d)
+    // factor of logs:        print(_d/_c,_c/_b,_b/_a)
+    // logOfFactors:          local __a,__b,__c=math.log(_d/_c),math.log(_c/_b),math.log(_b/_a)
+    // factorsOfLogOfFactors: print(__c/__b,__b/__a) end
+
+    // if we don't have at least 2 points, there is nothing to do
+    if (nDataPoints < 2) {
+        bias = -1;
+        return -1;
+    }
+
+    #define DEBUG(_VAR, _LEN) { \
+        std::cout << "\t--> " #_VAR ": {"; \
+        for (unsigned i=0; i<_LEN; i++) { \
+            auto n =_VAR[i]; \
+            std::cout << n << ","; \
+        } \
+        std::cout << "}\n" << std::flush; }
+
+    double logOfPoints[nDataPoints];
+//DEBUG(dataPoints, nDataPoints)
+    computeLogs(dataPoints, nDataPoints, logOfPoints);
+//DEBUG(logOfPoints, nDataPoints)
+    double factorOfLogs[nDataPoints-1];
+    computeFactors(logOfPoints, nDataPoints, factorOfLogs);
+//DEBUG(factorOfLogs, nDataPoints-1)
+    double averageExponentiality = computeAverage(factorOfLogs, nDataPoints-1);
+//std::cout << "\t\t*** averageExponentiality is " << averageExponentiality << "\n";
+
+    // compute the expoents of the expoents if we have more than 2 points
+    if (nDataPoints > 2) {
+        double logOfFactors[nDataPoints-1];
+        computeLogs(factorOfLogs, nDataPoints-1, logOfFactors);
+//DEBUG(logOfFactors, nDataPoints-1)
+        double factorOfLogOfFactors[nDataPoints-2];
+        computeFactors(logOfFactors, nDataPoints-1, factorOfLogOfFactors);
+//DEBUG(factorOfLogOfFactors, nDataPoints-2)
+        bias = computeAverage(factorOfLogOfFactors, nDataPoints-2);
+    } else {
+        bias = 1;
+    }
+
+    return averageExponentiality;
+}
+
+
+// test section
+///////////////
+
+static struct timespec timespec_now;
+static inline unsigned long long getMonotonicRealTimeNS() {
+    clock_gettime(CLOCK_MONOTONIC, &timespec_now);
+    return (timespec_now.tv_sec*1000000000ll) + timespec_now.tv_nsec;
+}
 
 void check(unsigned& nEvents) {
     if ( (producerCount != nEvents) || (consumerCount != nEvents) ) {
@@ -94,7 +223,6 @@ void check(unsigned& nEvents) {
 
 // spike methods
 ////////////////
-
 
 void reset() {
     producerCount.store(0, std::memory_order_release);
@@ -323,6 +451,13 @@ void performMeasurement(unsigned strategyNumber,
                         _ConsumerFunction consumerFunction, string consumerFunctionName,
                         _StopFunction         stopFunction, string stopFunctionName) {
 
+    // each measurement will be stored for analysis
+    struct {
+        unsigned            nConsumers;
+        unsigned            nProducers;
+        unsigned long long  averageEventDurationNS;
+    } measurements[N_TESTS_PER_STRATEGY];
+
     std::cout << "\n\nStaring the STRATEGY #" << strategyNumber << " measurements: '" << producerFunctionName << "' / '" << consumerFunctionName << "':\n";
     std::cout << "\tnTest; nProducers; nConsumers;    nEvents   -->   (  tEvent;         tTotal  ):\n" << std::flush;
     for (unsigned nTest=0; nTest<N_TESTS_PER_STRATEGY; nTest++) {
@@ -367,16 +502,71 @@ void performMeasurement(unsigned strategyNumber,
                      PAD(tEvent, 6)   << "ns; " <<
                      PAD(elapsed, 14) << "ns)" <<
                      (nTest < N_TESTS_PER_STRATEGY-1 ? ",\n":".\n") << std::flush;
+
+        // record measurement
+        measurements[nTest].nConsumers             = nConsumers;
+        measurements[nTest].nProducers             = nProducers;
+        measurements[nTest].averageEventDurationNS = tEvent;
     }
     std::cout << "\n";
+
+    std::cout << "\t--> Analisys:\n";
+
+    // helper computations
+    //////////////////////
+
+    // filters 'measurements' array and set the values into 'averageEventDurations'
+    // -- it's size should be:
+    //      1                           -- if you provide both 'nProducers' and 'nConsumers'
+    //      sqrt(N_TESTS_PER_STRATEGY)  -- if you just provide one of them (passing the other as -1)
+    auto getTimesForProducersAndConsumers = [&measurements](unsigned nProducers, unsigned nConsumers, unsigned long long* averageEventDurations) {
+        unsigned index=0;
+        for (unsigned i=0; i<N_TESTS_PER_STRATEGY; i++) {
+            if ( ( (nProducers == -1) || (measurements[i].nProducers == nProducers) ) &&
+                 ( (nConsumers == -1) || (measurements[i].nConsumers == nConsumers) ) )  {
+                averageEventDurations[index++] = measurements[i].averageEventDurationNS;
+            }
+        }
+    };
+
+    // analysis
+    ///////////
+
+    unsigned valuesForConsumerAndProducers[] = {1,2,4,16};   // these are the sqrt(N_TESTS_PER_STRATEGY) elements from 'N_PRODUCERS_CONSUMERS'
+    for(unsigned nConsumers : valuesForConsumerAndProducers) {
+        unsigned long long averageEventDurations[4];
+        getTimesForProducersAndConsumers(-1, nConsumers, averageEventDurations);
+        double bias;
+        double exponentiality = getExponentiality(averageEventDurations, 4, bias);
+        std::cout << "\t\tExponentiality among 'nProducers' when nConsumers = " << PAD(nConsumers, 2) << ":  "
+                  << exponentiality << "; bias:" << bias << "\n";
+    }
+    for(unsigned nProducers : valuesForConsumerAndProducers) {
+        unsigned long long averageEventDurations[4];
+        getTimesForProducersAndConsumers(nProducers, -1, averageEventDurations);
+        double bias;
+        double exponentiality = getExponentiality(averageEventDurations, 4, bias);
+        std::cout << "\t\tExponentiality among 'nConsumers' when nProducers = " << PAD(nProducers, 2) << ":  "
+                  << exponentiality << "; bias:" << bias << "\n";
+    }
 }
 
 int main(void) {
 
 	std::cout << DOCS;
 
+    printInfo();
+
     // formatted output
     std::cout.imbue(std::locale(""));
+
+    unsigned long long data[] = {49,71,120,436};
+    std::cout << "Exponentiality for {";
+    for (unsigned long long n : data) std::cout << n << ",";
+    double bias;
+    double exponentiality = getExponentiality(data, 4, bias);
+    std::cout << "}: " << exponentiality << " (bias: " << bias << ")\n\n";
+//    exit(1);
 
     PERFORM_MEASUREMENT(0,         mutexProducer,         mutexConsumer,         mutexStop);
     PERFORM_MEASUREMENT(1, relaxSpinLockProducer, relaxSpinLockConsumer, relaxSpinLockStop);
@@ -437,11 +627,10 @@ int main(void) {
     std::cout << "\n\nStaring the 'linearProducerConsumer' (no threads) measurements:\n";
     std::cout << "\t(tEvent, nEvents, tTotal): " << std::flush;
     reset();
-    unsigned nEvents = BASE_NUMBER_OF_EVENTS * STRATEGY_FACTOR[4];   // 4 is the STRATEGY_NUMBER for linearProducerConsumer
+    unsigned nEvents = BASE_NUMBER_OF_EVENTS * STRATEGY_FACTOR[5];   // 5 is the STRATEGY_NUMBER for linearProducerConsumer
     start = getMonotonicRealTimeNS();
     linearProducerConsumer(nEvents);
     elapsed = getMonotonicRealTimeNS() - start;
-    std::cout << PAD(elapsed, 6) << "ns\n";
     check(nEvents);
     unsigned tEvent = elapsed / nEvents;    // ns per event
     std::cout << "(" << PAD(tEvent, 3) << "ns, " << PAD(nEvents, 6) << ", " << PAD(elapsed, 6) << "ns).\n\n" << std::flush;
