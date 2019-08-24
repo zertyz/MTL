@@ -75,7 +75,7 @@ mutua::MTL::SpinLock<false> consumingBusySpinLock;
 // info section
 ///////////////
 
-#include <cpuid.h>
+//#include <cpuid.h>
 void printInfo() {
 
     string compilerVersion;
@@ -107,6 +107,7 @@ void printInfo() {
 
               << "\n" << std::flush;
 
+/*
     char CPUBrandString[0x40];
     unsigned int CPUInfo[4] = {0,0,0,0};
 
@@ -127,6 +128,7 @@ void printInfo() {
     }
 
     std::cout << "\tCPU Type           :  " << CPUBrandString << std::endl << std::endl;
+*/
 }
 
 
