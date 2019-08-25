@@ -1,0 +1,3 @@
+[submodule "cpp/EABase"]
+	path = external/EABase
+	url = https://github.com/electronicarts/EABase.git

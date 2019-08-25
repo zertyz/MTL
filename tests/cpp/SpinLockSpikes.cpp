@@ -5,6 +5,9 @@
 #include <cstring>
 #include <mutex>
 
+#include "../../cpp/TimeMeasurements.hpp"
+using namespace MTL::TimeMeasurements;
+
 #include "../../cpp/thread/SpinLock.hpp"
 
 // compile & run with clear; echo -en "\n\n###############\n\n"; echo (clan)g++ -std=c++17 -O3 -mcpu=native -march=native -mtune=native -pthread SpinLockSpikes.cpp -o SpinLockSpikes && sudo sync && sleep 2 && pkill -stop -f visual-studio-code && pkill -stop -f chrome && time nice -n 20 ./SpinLockSpikes; pkill -cont -f visual-studio-code; pkill -cont -f chrome
@@ -75,60 +78,17 @@ mutua::MTL::SpinLock<false> consumingBusySpinLock;
 // info section
 ///////////////
 
-//#include <cpuid.h>
+#include <EABase/config/eacompiler.h>
+#include <EABase/config/eaplatform.h>
 void printInfo() {
 
-    string compilerVersion;
-    if (strstr(__VERSION__, "Clang") == nullptr) {
-        compilerVersion = "gcc " __VERSION__;
-    } else {
-        compilerVersion = __VERSION__;
-    }
+    std::cout << "Compile-time Info:\n"
+                 "\tCompiler & Version :  " EA_COMPILER_STRING "\n"
+                 "\tOS                 :  " EA_PLATFORM_NAME "\n"
+                 "\tPlatform           :  " EA_PLATFORM_DESCRIPTION "\n"
+                 "\tEA_CACHE_LINE_SIZE :  " << EA_CACHE_LINE_SIZE << "\n" << std::flush
+    ;
 
-    std::cout << "Info:\n"
-                 "\tCompiler & Version :  " << compilerVersion << "\n"
-                 "\tOS                 :  " <<
-
-                #ifdef _WIN32
-                "Windows 32-bit"
-                #elif _WIN64
-                "Windows 64-bit"
-                #elif __linux__
-                "Linux"
-                #elif __FreeBSD__
-                "FreeBSD"
-                #elif __APPLE__ || __MACH__
-                "Mac OSX"
-                #elif __unix || __unix__
-                "Unix"
-                #else
-                "Unknown"
-                #endif
-
-              << "\n" << std::flush;
-
-/*
-    char CPUBrandString[0x40];
-    unsigned int CPUInfo[4] = {0,0,0,0};
-
-    __cpuid(0x80000000, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
-    unsigned int nExIds = CPUInfo[0];
-
-    memset(CPUBrandString, 0, sizeof(CPUBrandString));
-
-    for (unsigned int i = 0x80000000; i <= nExIds; ++i) {
-        __cpuid(i, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
-
-        if (i == 0x80000002)
-            memcpy(CPUBrandString, CPUInfo, sizeof(CPUInfo));
-        else if (i == 0x80000003)
-            memcpy(CPUBrandString + 16, CPUInfo, sizeof(CPUInfo));
-        else if (i == 0x80000004)
-            memcpy(CPUBrandString + 32, CPUInfo, sizeof(CPUInfo));
-    }
-
-    std::cout << "\tCPU Type           :  " << CPUBrandString << std::endl << std::endl;
-*/
 }
 
 
@@ -208,12 +168,6 @@ double getExponentiality(const _Numeric* dataPoints, unsigned nDataPoints, doubl
 
 // test section
 ///////////////
-
-static struct timespec timespec_now;
-static inline unsigned long long getMonotonicRealTimeNS() {
-    clock_gettime(CLOCK_MONOTONIC, &timespec_now);
-    return (timespec_now.tv_sec*1000000000ll) + timespec_now.tv_nsec;
-}
 
 void check(unsigned& nEvents) {
     if ( (producerCount != nEvents) || (consumerCount != nEvents) ) {
@@ -562,66 +516,49 @@ int main(void) {
     // formatted output
     std::cout.imbue(std::locale(""));
 
+    /* exponentiality test
     unsigned long long data[] = {49,71,120,436};
     std::cout << "Exponentiality for {";
     for (unsigned long long n : data) std::cout << n << ",";
     double bias;
     double exponentiality = getExponentiality(data, 4, bias);
     std::cout << "}: " << exponentiality << " (bias: " << bias << ")\n\n";
-//    exit(1);
+//    exit(1);*/
+
+    /* RDTSC
+    unsigned long long m_start  = getMonotonicRealTimeNS();
+    uint64_t pt_start  = getProcessorCycleCount();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    unsigned long long m_finish = getMonotonicRealTimeNS();
+    uint64_t pt_finish = getProcessorCycleCount();
+
+    std::cout << "m_start   : " << m_start   << "\n"
+                 "m_finish  : " << m_finish  << "\n"
+                 "pt_start  : " << pt_start  << "\n"
+                 "pt_finish : " << pt_finish << "\n";
+    */
+
+    // spin lock tests
+    mutua::MTL::SpinLock spl;
+    std::cout << "Standard spinlock size: " << sizeof(spl) << "\n";
+    mutua::MTL::SpinLock<true, true> msl;
+    std::cout << "Metrix-enabled spinlock size: " << sizeof(msl) << "\n";
+    mutua::MTL::SpinLock<true, true, 20000000000> dsl;
+    std::cout << "Timeout-enabled spinlock size: " << sizeof(dsl) << "\n";
+    dsl.lock();
+    thread t([&dsl]{dsl.lock();dsl.unlock();});
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    dsl.unlock();
+    t.join();
+    std::cout << "--> Did you see any timeout messages above?\n";
+    exit(0);
+
 
     PERFORM_MEASUREMENT(0,         mutexProducer,         mutexConsumer,         mutexStop);
     PERFORM_MEASUREMENT(1, relaxSpinLockProducer, relaxSpinLockConsumer, relaxSpinLockStop);
     PERFORM_MEASUREMENT(2,  busySpinLockProducer,  busySpinLockConsumer,  busySpinLockStop);
     PERFORM_MEASUREMENT(3,   relaxAtomicProducer,   relaxAtomicConsumer,   relaxAtomicStop);
     PERFORM_MEASUREMENT(4,    busyAtomicProducer,    busyAtomicConsumer,    busyAtomicStop);
-
-/*
-    std::cout << "\n\nStaring the 'relaxSpinLockProducer' / 'relaxSpinLockConsumer' measurements: " << std::flush;
-    reset();
-	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-		threads[_threadNumber] = std::thread(relaxSpinLockConsumer);
-	}
-    start = getMonotonicRealTimeNS();
-    relaxSpinLockProducer();
-    elapsed = getMonotonicRealTimeNS() - start;
-    for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-        threads[_threadNumber].join();
-    }
-    std::cout << PAD(elapsed, 6) << "ns\n";
-    check(elapsed);
-
-
-    std::cout << "\n\nStaring the 'busySpinLockProducer' / 'busySpinLockConsumer' measurements: " << std::flush;
-    reset();
-	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-		threads[_threadNumber] = std::thread(busySpinLockConsumer);
-	}
-    start = getMonotonicRealTimeNS();
-    busySpinLockProducer();
-    elapsed = getMonotonicRealTimeNS() - start;
-    for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-        threads[_threadNumber].join();
-    }
-    std::cout << PAD(elapsed, 6) << "ns\n";
-    check(elapsed);
-
-
-    std::cout << "\n\nStaring the 'busyAtomicProducer' / 'busyAtomicConsumer' measurements: " << std::flush;
-    reset();
-	for (unsigned _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-		threads[_threadNumber] = std::thread(busyAtomicConsumer);
-	}
-    start = getMonotonicRealTimeNS();
-    busyAtomicProducer();
-    elapsed = getMonotonicRealTimeNS() - start;
-    for (int _threadNumber=0; _threadNumber<N_THREADS; _threadNumber++) {
-        threads[_threadNumber].join();
-    }
-    std::cout << PAD(elapsed, 6) << "ns\n";
-    check(elapsed);
-
-*/
 
     unsigned long long start;
     unsigned long long elapsed;
