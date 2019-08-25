@@ -48,8 +48,11 @@ namespace mutua::MTL {
                  "cpuCyclesLocked="        << cpuCyclesLocked        << ", "
                  "cpuCyclesWaitingToLock=" << cpuCyclesWaitingToLock << ", "
                  "lastLockStartCycles="    << lockStart;
-            if (lockStart != -1) {
-                c << ", lastLockElapseCycles="   << (getProcessorCycleCount()-lockStart);
+            if (lockStart != ((int64_t)-1)) {
+                c << ", lastLockStartCycles="   << lockStart <<
+                     ", lastLockElapseCycles="  << (getProcessorCycleCount()-lockStart);
+            } else {
+                c << ", lastLockElapseCycles=-1";
             }
         }
     };
@@ -63,6 +66,8 @@ namespace mutua::MTL {
 
         inline void resetSpinLockMutexFallbackAdditionalFields() {
             mutexFallbackCount = 0;
+            mutex.unlock();
+            mutex.lock();   // the fallback mutex is left on a pre-lock state
         }
 
         inline void debugMutex(stringstream& c) {
@@ -148,7 +153,6 @@ namespace mutua::MTL {
               , std::conditional<isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>(),  SpinLockMutexFallbackAdditionalFields,  SpinLockMutexFallbackNoAdditionalFields>::type
     {
 
-
     public:
 
         SpinLock() {
@@ -204,21 +208,32 @@ namespace mutua::MTL {
 
                 // calls PAUSE or YIELD instruction, releasing the core to another CPU without context switching
                 // (else just do a normal busy wait)
-                if constexpr (_useRelaxInstruction) {
-                    // do it 32 times
-                    cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax();
-                    cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax();
-                    cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax();
-                    cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax(); cpu_relax();
-                }
+                if constexpr (_useRelaxInstruction) cpu_relax();
 
-                // conditional for debugging "spinning for too long" conditions
-                if constexpr (isSpinLockDebugEnabled<_debugAfterCycles>()) {
+                // debug & mutex fall back optional codes
+                if constexpr (isSpinLockDebugEnabled<_debugAfterCycles>() ||
+                              isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
+
                     uint64_t elapsedCycles = getProcessorCycleCount()-waitingToLockStart;
-                    if ((_debugAfterCycles > elapsedCycles) && (!spinningTooMuchDebugged)) {
-                        issueDebugMessage("Waiting too long to acquire a lock");
-                        spinningTooMuchDebugged = true;
+
+                    // conditional for debugging "spinning for too long" conditions
+                    if constexpr (isSpinLockDebugEnabled<_debugAfterCycles>()) {
+                        if ((elapsedCycles > _debugAfterCycles) && (!spinningTooMuchDebugged)) {
+                            issueDebugMessage("Waiting too long to acquire a lock");
+                            spinningTooMuchDebugged = true;
+                        }
                     }
+
+                    // conditional for fallbacking to a system mutex
+                    if constexpr (isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
+                        if (elapsedCycles > _mutexFallbackAfterCycles) {
+                            SpinLockMutexFallbackAdditionalFields::mutexFallbackCount++;
+std::cerr << "mlock:\n" << std::flush;
+                            SpinLockMutexFallbackAdditionalFields::mutex.lock();
+std::cerr << ":mlocked\n" << std::flush;
+                        }
+                    }
+
                 }
 
             }
@@ -255,16 +270,25 @@ namespace mutua::MTL {
 
 
         inline void unlock() {
+
             // conditional for 'unlockCallsCount', 'realUnlocksCount' and 'cpuCyclesLocked' metrics
             if constexpr (_opMetrics) {
                 SpinLockMetricsAdditionalFields::unlockCallsCount++;
                 // were we really locked?
-                if (likely (SpinLockMetricsAdditionalFields::lockStart != -1) ) {
+                if (likely (SpinLockMetricsAdditionalFields::lockStart != ((int64_t)-1)) ) {
                     SpinLockMetricsAdditionalFields::realUnlocksCount++;
                     SpinLockMetricsAdditionalFields::cpuCyclesLocked += getProcessorCycleCount() - SpinLockMetricsAdditionalFields::lockStart;
-                    SpinLockMetricsAdditionalFields::lockStart = -1;     // get back to the special val denoting we are unlocked
+                    SpinLockMetricsAdditionalFields::lockStart = ((int64_t)-1);     // get back to the special val denoting we are unlocked
                 }
             }
+
+            // conditional for clearing any fallback to a system mutex
+            if constexpr (isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
+                SpinLockMutexFallbackAdditionalFields::mutex.unlock();
+                SpinLockMutexFallbackAdditionalFields::mutex.try_lock();    // put it back in the pre-lock state
+std::cerr << ":munlocked\n" << std::flush;
+            }
+
             flag.clear(std::memory_order_release);
         }
 

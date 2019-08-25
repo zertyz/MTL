@@ -507,6 +507,7 @@ void performMeasurement(unsigned strategyNumber,
     }
 }
 
+static const char fslName[] = "mySpin";
 int main(void) {
 
 	std::cout << DOCS;
@@ -542,15 +543,25 @@ int main(void) {
     mutua::MTL::SpinLock spl;
     std::cout << "Standard spinlock size: " << sizeof(spl) << "\n";
     mutua::MTL::SpinLock<true, true> msl;
-    std::cout << "Metrix-enabled spinlock size: " << sizeof(msl) << "\n";
-    mutua::MTL::SpinLock<true, true, 20000000000> dsl;
+    std::cout << "Metrics-enabled spinlock size: " << sizeof(msl) << "\n";
+    mutua::MTL::SpinLock<true, true, 2'000'000'000> dsl;    // this is 1 seconds in a 2GHz CPU
     std::cout << "Timeout-enabled spinlock size: " << sizeof(dsl) << "\n";
     dsl.lock();
-    thread t([&dsl]{dsl.lock();dsl.unlock();});
+    {thread t([&dsl]{dsl.lock();dsl.unlock();});
     std::this_thread::sleep_for(std::chrono::milliseconds(3000));
     dsl.unlock();
-    t.join();
+    t.join();}
     std::cout << "--> Did you see any timeout messages above?\n";
+    mutua::MTL::SpinLock<true, true, 2'000'000'000, fslName, 4'000'000'000> fsl;    // this is 1 seconds in a 2GHz CPU
+    std::cout << "Named, Fallback-enabled spinlock size: " << sizeof(fsl) << "\n";
+    fsl.lock();cerr << "<<1>>" << flush;
+    {thread t([&fsl]{fsl.lock();cerr << "<<2>>" << flush;fsl.unlock();cerr << "<<3>>" << flush;});
+    std::this_thread::sleep_for(std::chrono::milliseconds(8000));
+    fsl.unlock();
+    cerr << "<<4>>" << flush;
+    t.join();cerr << "<<5>>" << flush;}
+    std::cout << "--> Now lets see the real mutexes count:" << std::flush;
+    fsl.issueDebugMessage("After fully unlocked...");
     exit(0);
 
 
