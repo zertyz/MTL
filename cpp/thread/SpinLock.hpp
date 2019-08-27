@@ -20,9 +20,9 @@ using namespace MTL::TimeMeasurements;
 namespace mutua::MTL {
 
     /** conditional base class when using a spin lock with metrics DISABLED */
-    struct SpinLockMetricsNoAdditionalFields {};
+    struct SpinLockStandardMetricsNoAdditionalFields {};
     /** conditional base class when using a spin lock with metrics ENABLED */
-    struct SpinLockMetricsAdditionalFields {
+    struct SpinLockStandardMetricsAdditionalFields {
         // metrics variables
         unsigned lockCallsCount, unlockCallsCount, tryLocksCount;
         unsigned realLocksCount, realUnlocksCount;
@@ -30,7 +30,7 @@ namespace mutua::MTL {
         // auxiliar variables
         uint64_t lockStart;
 
-        inline void resetSpinLockMetricsAdditionalFields() {
+        inline void reset() {
             lockCallsCount         = 0;
             unlockCallsCount       = 0;
             realLocksCount         = 0;
@@ -46,28 +46,23 @@ namespace mutua::MTL {
                  "unlockCallsCount="       << unlockCallsCount       << ", "
                  "tryLocksCount="          << tryLocksCount          << ", "
                  "cpuCyclesLocked="        << cpuCyclesLocked        << ", "
-                 "cpuCyclesWaitingToLock=" << cpuCyclesWaitingToLock << ", "
-                 "lastLockStartCycles="    << lockStart;
+                 "cpuCyclesWaitingToLock=" << cpuCyclesWaitingToLock;
             if (lockStart != ((int64_t)-1)) {
-                c << ", lastLockStartCycles="   << lockStart <<
+                c << /*", lastLockStartCycles="   << lockStart <<*/     // this is most probably an unneeded info...
                      ", lastLockElapseCycles="  << (getProcessorCycleCount()-lockStart);
-            } else {
-                c << ", lastLockElapseCycles=-1";
             }
         }
     };
 
-    /** conditional base class when using a spin lock with mutex fallback DISABLED */
-    struct SpinLockMutexFallbackNoAdditionalFields {};
-    /** conditional base class when using a spin lock with mutex fallback ENABLED */
-    struct SpinLockMutexFallbackAdditionalFields {
+    /** conditional base class when having metrics enabled and mutex fallback DISABLED */
+    struct SpinLockMutexMetricsNoAdditionalFields {};
+    /** conditional base class when having metrics enabled and mutex fallback also ENABLED */
+    struct SpinLockMutexMetricsAdditionalFields {
         unsigned    mutexFallbackCount;
         std::mutex  mutex;
 
-        inline void resetSpinLockMutexFallbackAdditionalFields() {
+        inline void reset() {
             mutexFallbackCount = 0;
-            mutex.unlock();
-            mutex.lock();   // the fallback mutex is left on a pre-lock state
         }
 
         inline void debugMutex(stringstream& c) {
@@ -84,20 +79,68 @@ namespace mutua::MTL {
         return _debugAfterCycles > 0;
     }
 
+    /** constexpr to check if we must enable code for mutex metrics & statistics */
     template <bool _opMetrics, unsigned long long _mutexFallbackAfterCycles>
-    inline constexpr bool isSpinLockMutexFallbackEnabled() {
-        if constexpr (_mutexFallbackAfterCycles > 0) {
-            static_assert(_opMetrics, "MTL::SpinLock: to enable system mutex fallback you must also enable '_opMetrics'");
+    inline constexpr bool isMutexMetricsEnabled() {
+        if constexpr (_opMetrics && (_mutexFallbackAfterCycles > 0)) {
             return true;
         } else {
             return false;
         }
     }
 
-    /** fields required on all sub-specializations of a 'SpinLock' */
-    struct SpinLockCommonFields {
-        std::atomic_flag flag = ATOMIC_FLAG_INIT;
+    template <unsigned long long _mutexFallbackAfterCycles>
+    inline constexpr bool isMutexFallbackEnabled() {
+        if constexpr (_mutexFallbackAfterCycles > 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    // pseudo base-class named 'LockSpecialization' used to build
+    // both 'MutexLockSpecialization' and 'SpinLockSpecialization'
+    // (no implementation of this virtual class is made because
+    // we are using templates with conditional compilation)
+    // template <bool _useRelaxInstruction>
+    // struct LockSpecialization {
+    //    inline void _lock();
+    //    inline bool _try_lock();
+    //    inline void _unlock();
+    // }
+
+    /**  'std::mutex' based lock specialization */
+    template <bool _useRelaxInstruction>
+    struct MutexLockSpecialization {
+        std::mutex  mutex;
+        inline void _lock() {
+            mutex.lock();
+        }
+        inline bool _try_lock() {
+            return mutex.try_lock();
+        }
+        inline void _unlock() {
+            mutex.unlock();
+        }
     };
+
+    /** 'atomic_flag' based lock specialization  */
+    template <bool _useRelaxInstruction>
+    struct SpinLockSpecialization {
+        std::atomic_flag flag = ATOMIC_FLAG_INIT;
+        inline void _lock() {
+            while (!_try_lock()) {
+                if constexpr (_useRelaxInstruction) cpu_relax();
+            }
+        }
+        inline bool _try_lock() {
+            return !flag.test_and_set(std::memory_order_relaxed);   // the '!' will be optimized for '!try_lock()' tests
+        }
+        inline void _unlock() {
+            flag.clear();
+        }
+    };
+
 
     /**
      * SpinLock.hpp
@@ -146,23 +189,67 @@ namespace mutua::MTL {
              SpinLockCallbackSignature _instrumentBusyWaitCallback  = nullptr,
              SpinLockCallbackSignature _instrumentMutexLockCallback = nullptr>   // enable to output to stderr debug information & activelly check for reentrancy errors
     class SpinLock
-              // common fields among all sub-specializations
-              : SpinLockCommonFields
-              // additional fields based on template parameters
-              , std::conditional<_opMetrics,                                                               SpinLockMetricsAdditionalFields,        SpinLockMetricsNoAdditionalFields>::type
-              , std::conditional<isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>(),  SpinLockMutexFallbackAdditionalFields,  SpinLockMutexFallbackNoAdditionalFields>::type
+              /*** CONDITIONAL BASE CLASSES DECLARATION -- in order to allow conditional fields ***/
+              // which lock to use? spin (atomic_flag) or system mutex?
+              : std::conditional<isMutexFallbackEnabled<_mutexFallbackAfterCycles>(),             MutexLockSpecialization<_useRelaxInstruction>,   SpinLockSpecialization<_useRelaxInstruction>>::type
+              // additional class fields based on template parameters
+              , std::conditional<_opMetrics,                                                      SpinLockStandardMetricsAdditionalFields,         SpinLockStandardMetricsNoAdditionalFields>::type
+              , std::conditional<isMutexMetricsEnabled<_opMetrics, _mutexFallbackAfterCycles>(),  SpinLockMutexMetricsAdditionalFields,            SpinLockMutexMetricsNoAdditionalFields>::type
     {
+
+        // conditional code functionalities from the template parameters -- see the docs on the associated template parameters
+        static constexpr bool doUseRelaxInstruction      = _useRelaxInstruction;
+        static constexpr bool doCollectStandardMetrics   = _opMetrics;
+        static constexpr bool doCollectMutextMetrics     = isMutexMetricsEnabled<_opMetrics, _mutexFallbackAfterCycles>();
+        static constexpr bool doDebugSpinTimeouts        = isSpinLockDebugEnabled<_debugAfterCycles>();
+        static constexpr bool doWaitForMutexFallback     = isMutexFallbackEnabled<_mutexFallbackAfterCycles>();
+        static constexpr bool doInstrumentLocks          = _instrumentLockCallback      != nullptr;
+        static constexpr bool doInstrumentUnlocks        = _instrumentUnlockCallback    != nullptr;
+        static constexpr bool doInstrumentBusyWaits      = _instrumentBusyWaitCallback  != nullptr;
+        static constexpr bool doInstrumentMutexFallbacks = _instrumentMutexLockCallback != nullptr;
+
+
+        // TODO: the following _lock, _try_lock and _unlock implementations shouldn't be needed, but on C++17,
+        //       both clang and gcc requires them (gcc does not require them if we use the -fpermissive compilation flag).
+        //       Will them still be needed in C++20?
+        inline void _lock() {
+            // calls either MutexLockSpecialization::_lock() or SpinLockSpecialization::_lock()
+            std::conditional<isMutexFallbackEnabled<_mutexFallbackAfterCycles>(),
+                             MutexLockSpecialization<_useRelaxInstruction>,
+                             SpinLockSpecialization<_useRelaxInstruction>>::type::_lock();
+        }
+        inline bool _try_lock() {
+            // calls either MutexLockSpecialization::_try_lock() or SpinLockSpecialization::_try_lock()
+            return std::conditional<isMutexFallbackEnabled<_mutexFallbackAfterCycles>(),
+                                   MutexLockSpecialization<_useRelaxInstruction>,
+                                   SpinLockSpecialization<_useRelaxInstruction>>::type::_try_lock();
+        }
+        inline void _unlock() {
+            // calls either MutexLockSpecialization::_unlock() or SpinLockSpecialization::_unlock()
+            std::conditional<isMutexFallbackEnabled<_mutexFallbackAfterCycles>(),
+                             MutexLockSpecialization<_useRelaxInstruction>,
+                             SpinLockSpecialization<_useRelaxInstruction>>::type::_unlock();
+        }
+
 
     public:
 
         SpinLock() {
+            // asserts on template parameters
+            static_assert((_mutexFallbackAfterCycles == 0) || (_debugAfterCycles == 0) || (_debugAfterCycles < _mutexFallbackAfterCycles),
+                          "Template parameter '_debugAfterCycles' cannot be greater than '_mutexFallbackAfterCycles' -- "
+                          "otherwise the requested debug messages would never be shown. You must either correct the "
+                          "relation or set one of them to zero.");
             // special cases
-            if constexpr (_opMetrics) {
-                SpinLockMetricsAdditionalFields::resetSpinLockMetricsAdditionalFields();
+            if constexpr (doCollectStandardMetrics) {
+                SpinLockStandardMetricsAdditionalFields::reset();
             }
-            if constexpr (isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
-                SpinLockMutexFallbackAdditionalFields::resetSpinLockMutexFallbackAdditionalFields();
+            if constexpr (doCollectMutextMetrics) {
+                SpinLockMutexMetricsAdditionalFields::reset();
             }
+/*            if constexpr (doDebugSpinTimeouts) {
+                issueDebugMessage("Just created the mutex");
+            }*/
         }
 
         inline void issueDebugMessage(string message) {
@@ -172,11 +259,11 @@ namespace mutua::MTL {
             } else {
                 c << "MTL::SpinLock: " << message << ": {";
             }
-            if constexpr (_opMetrics) {
-                SpinLockMetricsAdditionalFields::debugMetrics(c);
+            if constexpr (doCollectStandardMetrics) {
+                SpinLockStandardMetricsAdditionalFields::debugMetrics(c);
             }
-            if constexpr (isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
-                SpinLockMutexFallbackAdditionalFields::debugMutex(c);
+            if constexpr (doCollectMutextMetrics) {
+                SpinLockMutexMetricsAdditionalFields::debugMutex(c);
             }
             c << "}\n";
             std::cerr << c.str() << std::flush;
@@ -184,53 +271,79 @@ namespace mutua::MTL {
 
         inline void lock() {
 
-            // these variables will be optimized out if the template vars
-            // unsed in the 'if constexpr's bellow are not set
+            // these variables will be optimized out if the conditional
+            // codes in the 'if constexpr's bellow are not used
             uint64_t waitingToLockStart;                // measure the cycles spent spinning
             bool     spinningTooMuchDebugged = false;   // will be true if a "spinning for too long" debug message was issued
 
             // conditional for 'lockCallsCount' and, possibly, 'cpuCyclesWaitingToLock' metrics
-            if constexpr (_opMetrics) {
-                SpinLockMetricsAdditionalFields::lockCallsCount++;
+            if constexpr (doCollectStandardMetrics) {
+                SpinLockStandardMetricsAdditionalFields::lockCallsCount++;
                 // flag is already locked?
-                if (flag.test_and_set(std::memory_order_relaxed)) {
-                    waitingToLockStart = getProcessorCycleCount();     // will, eventually, be used to increment 'cpuCyclesWaitingToLock'
-                } else {
-                    SpinLockMetricsAdditionalFields::lockStart = getProcessorCycleCount();  // will be used to increment 'cpuCyclesLocked'
+                if (_try_lock()) {
+                    SpinLockStandardMetricsAdditionalFields::lockStart = getProcessorCycleCount();  // will be used to increment 'cpuCyclesLocked'
                     // if it wasn't lock (remember that now it is), bail out since the work is done
                     // and we don't want to touch 'cpuCyclesWaitingToLock' because we didn't wait at all
                     return ;
+                } else {
+                    waitingToLockStart = getProcessorCycleCount();     // will, eventually, be used to increment 'cpuCyclesWaitingToLock'
                 }
             }
 
-            // until we may acquire the lock...
-            while (flag.test_and_set(std::memory_order_relaxed))  {
+            // do the following until we may acquire the lock...
+            while (!_try_lock())  {
 
                 // calls PAUSE or YIELD instruction, releasing the core to another CPU without context switching
                 // (else just do a normal busy wait)
-                if constexpr (_useRelaxInstruction) cpu_relax();
+                if constexpr (doUseRelaxInstruction) cpu_relax();
 
-                // debug & mutex fall back optional codes
-                if constexpr (isSpinLockDebugEnabled<_debugAfterCycles>() ||
-                              isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
+                // spin timeouts & mutex fall back optional codes
+                if constexpr (doDebugSpinTimeouts || doWaitForMutexFallback) {
 
                     uint64_t elapsedCycles = getProcessorCycleCount()-waitingToLockStart;
 
                     // conditional for debugging "spinning for too long" conditions
-                    if constexpr (isSpinLockDebugEnabled<_debugAfterCycles>()) {
+                    if constexpr (doDebugSpinTimeouts) {
                         if ((elapsedCycles > _debugAfterCycles) && (!spinningTooMuchDebugged)) {
                             issueDebugMessage("Waiting too long to acquire a lock");
                             spinningTooMuchDebugged = true;
                         }
                     }
 
-                    // conditional for fallbacking to a system mutex
-                    if constexpr (isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
+                    // conditional for falling backing to a system mutex -- note that the system
+                    // mutex code has already been inherited via 'MutexLockSpecialization'
+                    // and that what we really have to do now is to "hard lock" it --
+                    // the call to "_lock()" will only return when 'unlock()' is called in another thread
+                    if constexpr (doWaitForMutexFallback) {
                         if (elapsedCycles > _mutexFallbackAfterCycles) {
-                            SpinLockMutexFallbackAdditionalFields::mutexFallbackCount++;
-std::cerr << "mlock:\n" << std::flush;
-                            SpinLockMutexFallbackAdditionalFields::mutex.lock();
-std::cerr << ":mlocked\n" << std::flush;
+                            if constexpr (doCollectMutextMetrics) {
+                                SpinLockMutexMetricsAdditionalFields::mutexFallbackCount++;
+                            }
+
+                            // when we call '_lock()' bellow, we must assume "the lock has finally been acquired"
+                            // event already happened -- which, when using a spin lock, only happens after
+                            // this loop ends. Therefore, we must execute that event's code before the
+                            // "hard lock" takes place.
+
+                            /*** PLEASE, SEARCH THIS TAG AND KEEP THIS CODE THE SAME -- OR PUT THEM INTO A DEFINE ***/
+                            // conditional for giving a satisfaction on any eventually issue "spinning for too long" message
+                            if constexpr (doDebugSpinTimeouts) if (spinningTooMuchDebugged) {
+                                issueDebugMessage("Falling back to system mutex' hard lock");
+                            }
+
+                            // conditional for 'realLocksCount' and 'cpuCyclesWaitingToLock' metrics
+                            if constexpr (doCollectStandardMetrics) {
+                                SpinLockStandardMetricsAdditionalFields::realLocksCount++;
+                                SpinLockStandardMetricsAdditionalFields::lockStart = getProcessorCycleCount();   // will be used to increment 'cpuCyclesLocked' when this gets unlocked
+                                SpinLockStandardMetricsAdditionalFields::cpuCyclesWaitingToLock += SpinLockStandardMetricsAdditionalFields::lockStart-waitingToLockStart;
+                            }
+
+                            _lock();    // really blocks the execution of this thread for an undefined ammount of time
+
+                            // now we must ignore the rest of this function, for the mutex
+                            // will have already been unlocked at this point and the
+                            // "lock has finally been acquired event" have already been accounted for
+                            return;
                         }
                     }
 
@@ -238,16 +351,19 @@ std::cerr << ":mlocked\n" << std::flush;
 
             }
 
+            // the 'lock has finally been acquired' event:
+
+            /*** PLEASE, SEARCH THIS TAG AND KEEP THIS CODE THE SAME -- OR PUT THEM INTO A DEFINE ***/
             // conditional for giving a satisfaction on any eventually issue "spinning for too long" message
-            if constexpr (isSpinLockDebugEnabled<_debugAfterCycles>()) if (spinningTooMuchDebugged) {
+            if constexpr (doDebugSpinTimeouts) if (spinningTooMuchDebugged) {
                 issueDebugMessage("Lock finally acquired");
             }
 
             // conditional for 'realLocksCount' and 'cpuCyclesWaitingToLock' metrics
-            if constexpr (_opMetrics) {
-                SpinLockMetricsAdditionalFields::realLocksCount++;
-                SpinLockMetricsAdditionalFields::lockStart = getProcessorCycleCount();   // will be used to increment 'cpuCyclesLocked' when this gets unlocked
-                SpinLockMetricsAdditionalFields::cpuCyclesWaitingToLock += SpinLockMetricsAdditionalFields::lockStart-waitingToLockStart;
+            if constexpr (doCollectStandardMetrics) {
+                SpinLockStandardMetricsAdditionalFields::realLocksCount++;
+                SpinLockStandardMetricsAdditionalFields::lockStart = getProcessorCycleCount();   // will be used to increment 'cpuCyclesLocked' when this gets unlocked
+                SpinLockStandardMetricsAdditionalFields::cpuCyclesWaitingToLock += SpinLockStandardMetricsAdditionalFields::lockStart-waitingToLockStart;
             }
 
         }
@@ -255,41 +371,34 @@ std::cerr << ":mlocked\n" << std::flush;
 
         inline bool try_lock() {
             
-            if constexpr (_opMetrics) {
-                SpinLockMetricsAdditionalFields::tryLocksCount++;
+            if constexpr (doCollectStandardMetrics) {
+                SpinLockStandardMetricsAdditionalFields::tryLocksCount++;
                 // are we already locked?
-                if (unlikely (flag.test_and_set(std::memory_order_relaxed)) ) {
+                if (unlikely (!_try_lock()) ) {
                     return false;
                 }
-                SpinLockMetricsAdditionalFields::lockStart = getProcessorCycleCount();   // will be used to increment 'cpuCyclesLocked' when this gets unlocked
+                SpinLockStandardMetricsAdditionalFields::lockStart = getProcessorCycleCount();   // will be used to increment 'cpuCyclesLocked' when this gets unlocked
                 return true;
             }
 
-            return !flag.test_and_set(std::memory_order_relaxed);
+            return _try_lock();
         }
 
 
         inline void unlock() {
 
             // conditional for 'unlockCallsCount', 'realUnlocksCount' and 'cpuCyclesLocked' metrics
-            if constexpr (_opMetrics) {
-                SpinLockMetricsAdditionalFields::unlockCallsCount++;
+            if constexpr (doCollectStandardMetrics) {
+                SpinLockStandardMetricsAdditionalFields::unlockCallsCount++;
                 // were we really locked?
-                if (likely (SpinLockMetricsAdditionalFields::lockStart != ((int64_t)-1)) ) {
-                    SpinLockMetricsAdditionalFields::realUnlocksCount++;
-                    SpinLockMetricsAdditionalFields::cpuCyclesLocked += getProcessorCycleCount() - SpinLockMetricsAdditionalFields::lockStart;
-                    SpinLockMetricsAdditionalFields::lockStart = ((int64_t)-1);     // get back to the special val denoting we are unlocked
+                if (likely (SpinLockStandardMetricsAdditionalFields::lockStart != ((int64_t)-1)) ) {
+                    SpinLockStandardMetricsAdditionalFields::realUnlocksCount++;
+                    SpinLockStandardMetricsAdditionalFields::cpuCyclesLocked += getProcessorCycleCount() - SpinLockStandardMetricsAdditionalFields::lockStart;
+                    SpinLockStandardMetricsAdditionalFields::lockStart = ((int64_t)-1);     // get back to the special val denoting we are unlocked
                 }
             }
 
-            // conditional for clearing any fallback to a system mutex
-            if constexpr (isSpinLockMutexFallbackEnabled<_opMetrics, _mutexFallbackAfterCycles>()) {
-                SpinLockMutexFallbackAdditionalFields::mutex.unlock();
-                SpinLockMutexFallbackAdditionalFields::mutex.try_lock();    // put it back in the pre-lock state
-std::cerr << ":munlocked\n" << std::flush;
-            }
-
-            flag.clear(std::memory_order_release);
+            _unlock();
         }
 
         template <typename _type>
