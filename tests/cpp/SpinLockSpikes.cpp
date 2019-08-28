@@ -256,7 +256,7 @@ void lockConsumer() {
     while (true) {
         _consumingLock.lock();
 
-        if (unlikely (stopConsumers.load(std::memory_order_acquire)) ) {
+        if (unlikely (stopConsumers.load(std::memory_order_relaxed)) ) {
             _consumingLock.unlock();
             break;
         }
@@ -269,14 +269,14 @@ void lockConsumer() {
 
 void relaxAtomicProducer(unsigned nEvents) {
     for (unsigned i=0; i<nEvents; i++) {
-        unsigned currentProducerCount = producerCount.load(std::memory_order_acquire);
+        unsigned currentProducerCount = producerCount.load(std::memory_order_relaxed);
         while (!producerCount.compare_exchange_weak(currentProducerCount, currentProducerCount+1,
                                                     std::memory_order_release,
                                                     std::memory_order_relaxed)) {
             cpu_relax();
         }
         // wait until the event is consumed before passing on to the next one -- remember we are measuring the latency, not the throughput
-        while (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire)) {
+        while (producerCount.load(std::memory_order_relaxed) > consumerCount.load(std::memory_order_relaxed)) {
             cpu_relax();
         }
     }
@@ -286,17 +286,17 @@ void relaxAtomicProducer(unsigned nEvents) {
 void relaxAtomicStop() {
     // ask consumers to stop & wait for them
     stopConsumers.store(true, std::memory_order_release);
-    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) ;
+    while (numberOfActiveConsumers.load(std::memory_order_relaxed) > 0) ;
 }
 
 void relaxAtomicConsumer() {
-    numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
-    while (!stopConsumers.load(std::memory_order_acquire)) {
+    numberOfActiveConsumers.fetch_add(1, std::memory_order_relaxed);
+    while (!stopConsumers.load(std::memory_order_relaxed)) {
 
-        unsigned currentConsumerCount = consumerCount.load(std::memory_order_acquire);
+        unsigned currentConsumerCount = consumerCount.load(std::memory_order_relaxed);
 
         // is there a next event to be consumed already?
-        if (currentConsumerCount < producerCount.load(std::memory_order_acquire)) {
+        if (currentConsumerCount < producerCount.load(std::memory_order_relaxed)) {
 
             // try to consume it
             if (consumerCount.compare_exchange_weak(currentConsumerCount, currentConsumerCount+1,
@@ -308,7 +308,7 @@ void relaxAtomicConsumer() {
             }
         }
     }
-    numberOfActiveConsumers.fetch_sub(1, std::memory_order_acq_rel);
+    numberOfActiveConsumers.fetch_sub(1, std::memory_order_relaxed);
 }
 
 
@@ -317,13 +317,13 @@ void busyAtomicProducer(unsigned nEvents) {
         //if (!(i%1000000)) DEBUG_PRODUCER
         //if ( !(i%500'000) && (nEvents==4312000) ) DEBUG_PRODUCER
         // loop until this thread can produce the next event (until it is the thread who could increase the counter)
-        unsigned currentProducerCount = producerCount.load(std::memory_order_acquire);
+        unsigned currentProducerCount = producerCount.load(std::memory_order_relaxed);
         while (!producerCount.compare_exchange_weak(currentProducerCount, currentProducerCount+1,
                                                     std::memory_order_release,
                                                     std::memory_order_relaxed))
             ;
         // wait until the event is consumed before passing on to the next one -- remember we are measuring the latency, not the throughput
-        while (producerCount.load(std::memory_order_acquire) > consumerCount.load(std::memory_order_acquire))
+        while (producerCount.load(std::memory_order_relaxed) > consumerCount.load(std::memory_order_relaxed))
             ;
     }
 
@@ -332,17 +332,17 @@ void busyAtomicProducer(unsigned nEvents) {
 void busyAtomicStop() {
     // ask consumers to stop & wait for them
     stopConsumers.store(true, std::memory_order_release);
-    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) ;
+    while (numberOfActiveConsumers.load(std::memory_order_relaxed) > 0) ;
 }
 
 void busyAtomicConsumer() {
-    numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
-    while (!stopConsumers.load(std::memory_order_acquire)) {
+    numberOfActiveConsumers.fetch_add(1, std::memory_order_relaxed);
+    while (!stopConsumers.load(std::memory_order_relaxed)) {
 
-        unsigned currentConsumerCount = consumerCount.load(std::memory_order_acquire);
+        unsigned currentConsumerCount = consumerCount.load(std::memory_order_relaxed);
 
         // is there a next event to be consumed already?
-        if (currentConsumerCount < producerCount.load(std::memory_order_acquire)) {
+        if (currentConsumerCount < producerCount.load(std::memory_order_relaxed)) {
 
             // try to consume it
             if (consumerCount.compare_exchange_weak(currentConsumerCount, currentConsumerCount+1,
@@ -354,15 +354,15 @@ void busyAtomicConsumer() {
             }
         }
     }
-    numberOfActiveConsumers.fetch_sub(1, std::memory_order_acq_rel);
+    numberOfActiveConsumers.fetch_sub(1, std::memory_order_relaxed);
 }
 
 
 void linearProducerConsumer(unsigned nEvents) {
     // simulates the work the others producers / consumers do: simply increase their counters
     for (unsigned i=0; i<nEvents; i++) {
-        producerCount.fetch_add(1, std::memory_order_acq_rel);
-        consumerCount.fetch_add(1, std::memory_order_acq_rel);
+        producerCount.fetch_add(1, std::memory_order_relaxed);
+        consumerCount.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
