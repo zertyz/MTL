@@ -52,20 +52,18 @@ static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
 
     // arm
     #elif __arm__
-        // from https://github.com/google/benchmark/blob/v1.1.0/src/cycleclock.h#L116
-        uint32_t pmccntr;
-        uint32_t pmuseren;
-        uint32_t pmcntenset;
-        // Read the user mode perf monitor counter access permissions.
-        asm volatile("mrc p15, 0, %0, c9, c14, 0" : "=r"(pmuseren));
-        if (pmuseren & 1) {  // Allows reading perfmon counters for user mode code.
-            asm volatile("mrc p15, 0, %0, c9, c12, 1" : "=r"(pmcntenset));
-            if (pmcntenset & 0x80000000ul) {  // Is it counting?
-                asm volatile("mrc p15, 0, %0, c9, c13, 0" : "=r"(pmccntr));
-                // The counter is set up to count every 64th cycle
-                return static_cast<uint64_t>(pmccntr) * 64;  // Should optimize to << 6
-            }
+        // from -- https://www.raspberrypi.org/forums/viewtopic.php?t=30821
+        volatile unsigned cc;
+        static int init = 0;
+        if(!init) {
+            __asm__ __volatile__ ("mcr p15, 0, %0, c9, c12, 2" :: "r"(1<<31)); /* stop the cc */
+            __asm__ __volatile__ ("mcr p15, 0, %0, c9, c12, 0" :: "r"(5));     /* initialize */
+            __asm__ __volatile__ ("mcr p15, 0, %0, c9, c12, 1" :: "r"(1<<31)); /* start the cc */
+            init = 1;
         }
+        __asm__ __volatile__ ("mrc p15, 0, %0, c9, c13, 0" : "=r"(cc));
+
+        return cc;
 
     #else
 
