@@ -52,18 +52,39 @@ static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
 
     // arm
     #elif __arm__
-        // from -- https://www.raspberrypi.org/forums/viewtopic.php?t=30821
-        volatile unsigned cc;
-        static int init = 0;
-        if(!init) {
-            __asm__ __volatile__ ("mcr p15, 0, %0, c9, c12, 2" :: "r"(1<<31)); /* stop the cc */
-            __asm__ __volatile__ ("mcr p15, 0, %0, c9, c12, 0" :: "r"(5));     /* initialize */
-            __asm__ __volatile__ ("mcr p15, 0, %0, c9, c12, 1" :: "r"(1<<31)); /* start the cc */
-            init = 1;
-        }
-        __asm__ __volatile__ ("mrc p15, 0, %0, c9, c13, 0" : "=r"(cc));
+        // from -- https://stackoverflow.com/questions/3247373/how-to-measure-program-execution-time-in-arm-cortex-a8-processor?answertab=active#tab-top
+        static bool init = false;
+        if (!init) {
+            // in general enable all counters (including cycle counter)
+            int32_t value = 1;
 
-        return cc;
+            // peform reset:  
+            if (do_reset || true) {
+                value |= 2;     // reset all counters to zero.
+                value |= 4;     // reset cycle counter to zero.
+            } 
+
+            if (enable_divider || true) {
+                value |= 8;     // enable "by 64" divider for CCNT.
+            }
+
+            value |= 16;
+
+            // program the performance-counter control-register:
+            asm volatile ("MCR p15, 0, %0, c9, c12, 0\t\n" :: "r"(value));  
+
+            // enable all counters:  
+            asm volatile ("MCR p15, 0, %0, c9, c12, 1\t\n" :: "r"(0x8000000f));  
+
+            // clear overflows:
+            asm volatile ("MCR p15, 0, %0, c9, c12, 3\t\n" :: "r"(0x8000000f));
+            init = true;
+        }
+
+        unsigned int value;
+        // Read CCNT Register
+        asm volatile ("MRC p15, 0, %0, c9, c13, 0\t\n": "=r"(value));  
+        return value;
 
     #else
 
