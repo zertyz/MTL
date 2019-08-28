@@ -59,12 +59,12 @@ static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
             int32_t value = 1;
 
             // peform reset:  
-            if (do_reset || true) {
+            if (/*do_reset || */true) {
                 value |= 2;     // reset all counters to zero.
                 value |= 4;     // reset cycle counter to zero.
             } 
 
-            if (enable_divider || true) {
+            if (/*enable_divider || */true) {
                 value |= 8;     // enable "by 64" divider for CCNT.
             }
 
