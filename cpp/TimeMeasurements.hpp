@@ -86,6 +86,8 @@ static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
         asm volatile ("MRC p15, 0, %0, c9, c13, 0\t\n": "=r"(value));  
         return value;
 
+        // for this to work on arm, one should build and insmod a kernel module
+        // https://matthewarcus.wordpress.com/2018/01/27/using-the-cycle-counter-registers-on-the-raspberry-pi-3/
     #else
 
         #error Unknown Processor
