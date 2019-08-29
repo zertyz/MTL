@@ -43,7 +43,7 @@ static_assert(N_TESTS_PER_STRATEGY == sizeof(N_EVENTS_FACTOR)/sizeof(N_EVENTS_FA
               "'N_PRODUCERS_CONSUMERS' and 'N_EVENTS_FACTOR' must be of the same length");
 
 /** Multiplication factor for each algorithm:     {mutex, relaxed spin-lock, busy spin-lock, relaxed atomic, busy atomic, linear} */
-constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,            100,            100,         100,   10000};
+constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,            100,            100,         100,   1'000,  100'000};
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -358,6 +358,51 @@ void busyAtomicConsumer() {
 }
 
 
+atomic_flag flag;
+atomic_int flag2 = 1;
+atomic_bool flag3 = false;
+alignas(64) atomic_uint ilock = 0;
+alignas(64) atomic_uint iunlock = 0;
+void parallelIndependentProducer(unsigned nEvents) {
+    for (unsigned i=0; i<nEvents; i++) {
+        //while (flag.test_and_set(std::memory_order_relaxed)) ;
+        //while (flag2.fetch_add(1, std::memory_order_acq_rel) > 0) ;
+        while (flag3.load(std::memory_order_relaxed) || flag3.exchange(true, std::memory_order_release)) cpu_relax();
+        //for (unsigned currunlock = iunlock.load(std::memory_order_relaxed);
+        //     !ilock.compare_exchange_weak(currunlock, currunlock+1, std::memory_order_release, std::memory_order_relaxed);
+        //     currunlock = iunlock.load(std::memory_order_relaxed)) cpu_relax();
+        producerCount.fetch_add(1, std::memory_order_release);
+    }
+}
+
+void parallelIndependentStop() {
+    unsigned count = producerCount.load(std::memory_order_acquire);
+    // wait for all events to be consumed
+    while (consumerCount.load(std::memory_order_acquire) < count) {
+        std::this_thread::yield();
+    }
+    stopConsumers.store(true, std::memory_order_release);
+    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) ;
+}
+
+void parallelIndependentConsumer() {
+    numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
+    while (true) {
+        if (consumerCount.fetch_add(1, std::memory_order_acq_rel) >= producerCount.load(std::memory_order_acquire)) {
+            consumerCount.fetch_sub(1, std::memory_order_release);
+        }
+        if (stopConsumers.load(std::memory_order_acquire)) {
+            break;
+        }
+        //flag.clear(std::memory_order_release);
+        //flag2.store(0, std::memory_order_release);
+        flag3.store(false, std::memory_order_release);
+        //iunlock.store(ilock.load(std::memory_order_relaxed), std::memory_order_release);
+    }
+    numberOfActiveConsumers.fetch_sub(1, std::memory_order_release);
+}
+
+
 void linearProducerConsumer(unsigned nEvents) {
     // simulates the work the others producers / consumers do: simply increase their counters
     for (unsigned i=0; i<nEvents; i++) {
@@ -600,24 +645,28 @@ int main(void) {
     void (&relaxMutexFallbackSpinLockStop)     ()         = lockStop      <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
     void (&relaxMutexFallbackSpinLockDebug)    ()         = debugDeadLock <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
 
+    void (&parallelIndependentDebug) () = debugDeadLock<producingMutex, consumingMutex, false>;
 
-    PERFORM_MEASUREMENT(0,                mutexProducer,                mutexConsumer,                 mutexStop, mutexDebug);
+
+/*    PERFORM_MEASUREMENT(0,                mutexProducer,                mutexConsumer,                 mutexStop, mutexDebug);
 
     PERFORM_MEASUREMENT(1,        relaxSpinLockProducer,        relaxSpinLockConsumer,         relaxSpinLockStop, relaxSpinLockDebug);
 
     PERFORM_MEASUREMENT(1, relaxMetricsSpinLockProducer, relaxMetricsSpinLockConsumer,  relaxMetricsSpinLockStop, relaxMetricsSpinLockDebug);
     producingRelaxMetricsSpinLock.issueDebugMessage("final statistics");
     consumingRelaxMetricsSpinLock.issueDebugMessage("final statistics");
-
+*/
     PERFORM_MEASUREMENT(1, relaxMutexFallbackSpinLockProducer, relaxMutexFallbackSpinLockConsumer,  relaxMutexFallbackSpinLockStop, relaxMutexFallbackSpinLockDebug);
     producingRelaxMutexFallbackSpinLock.issueDebugMessage("final statistics");
     consumingRelaxMutexFallbackSpinLock.issueDebugMessage("final statistics");
-
+/*
     PERFORM_MEASUREMENT(2,         busySpinLockProducer,         busySpinLockConsumer,          busySpinLockStop, busySpinLockDebug);
 
     PERFORM_MEASUREMENT(3,          relaxAtomicProducer,          relaxAtomicConsumer,           relaxAtomicStop, nullptr);
 
     PERFORM_MEASUREMENT(4,           busyAtomicProducer,           busyAtomicConsumer,            busyAtomicStop, nullptr);
+*/
+    PERFORM_MEASUREMENT(5,  parallelIndependentProducer,  parallelIndependentConsumer,   parallelIndependentStop, parallelIndependentDebug);
 
 
     unsigned long long start;
@@ -626,7 +675,7 @@ int main(void) {
     std::cout << "\n\nStaring the 'linearProducerConsumer' (no threads) measurements:\n";
     std::cout << "\t(tEvent, nEvents, tTotal): " << std::flush;
     reset();
-    unsigned nEvents = BASE_NUMBER_OF_EVENTS * STRATEGY_FACTOR[5];   // 5 is the STRATEGY_NUMBER for linearProducerConsumer
+    unsigned nEvents = BASE_NUMBER_OF_EVENTS * STRATEGY_FACTOR[6];   // 6 is the STRATEGY_NUMBER for linearProducerConsumer
     start = getMonotonicRealTimeNS();
     linearProducerConsumer(nEvents);
     elapsed = getMonotonicRealTimeNS() - start;
