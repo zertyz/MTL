@@ -12,7 +12,7 @@
  * Elapsed Real Time measurement functions -- milli, micro, nano and even less seconds.
  *
  * With the exception of 'getProcessorCycleCount', no other function here is reentrant. */
-namespace MTL::TimeMeasurements {
+namespace MTL::time::TimeMeasurements {
 
     static inline unsigned long long getRealTimeMS();
     static inline unsigned long long getRealTimeUS();
@@ -38,7 +38,7 @@ namespace MTL::TimeMeasurements {
 
 
 // scoped functions definitions
-using namespace MTL;
+using namespace MTL::time;
 
 
 static inline uint64_t TimeMeasurements::getProcessorCycleCount() {

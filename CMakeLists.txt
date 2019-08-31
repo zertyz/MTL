@@ -3,7 +3,7 @@
 #	TYPE="Release"; rm -fr $TYPE; mkdir $TYPE; cd $TYPE; CXX=/usr/bin/clang++ cmake -G Ninja -DCMAKE_BUILD_TYPE=$TYPE ..; cmake --build .; ctest; cd ..; ls -l "$TYPE/tests/CppUtilsSpikes"
 
 cmake_minimum_required (VERSION 3.9)
-project                (CppUtils VERSION 2018.10.09)
+project                (MTL VERSION 2019.08.30)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -march=native -mcpu=native -mtune=native")	# binary is optimized, but machine dependent

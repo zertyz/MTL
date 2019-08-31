@@ -3,13 +3,13 @@
 # The rules here should be used when importing this library into other projects
 
 cmake_minimum_required (VERSION 3.9)
-project                (CppUtilsSpikes VERSION 2018.10.09)
+project                (MTLSpikes VERSION 2019.08.30)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -march=native -mcpu=native -mtune=native")	# binary is optimized, but machine dependent
 
 # increase the limit for constexpr loops
- set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -fconstexpr-steps=208896000")		# for clang 12*17*1024000 for constexpr 1M, 16 char keys	-- requires 5,6G RAM
+#set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -fconstexpr-steps=208896000")		# for clang 12*17*1024000 for constexpr 1M, 16 char keys	-- requires 5,6G RAM
 #set(CMAKE_CXX_FLAGS    "${CMAKE_CXX_FLAGS} -fconstexpr-loop-limit=17409000")	# for gcc, 1024000*17+1000 for constexpr 1M, 16 char keys	-- requires more than 7G of RAM
 
 
@@ -21,7 +21,7 @@ add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 ##########################
 # mutua libraries have the inclues inside the "cpp/" directory
 
-foreach (_referencedLib CppUtils)
+foreach (_referencedLib MTL)
 	set(_referencedLib_SOURCES "../../${_referencedLib}/cpp/")
 	message("    --> searching library '${_referencedLib}' in '~/.cmake/packages/${_referencedLib}' with headers in '${_referencedLib_SOURCES}'")
 	if (NOT TARGET ${_referencedLib})

@@ -5,12 +5,13 @@
 #include <cstring>
 #include <mutex>
 
-#include "../../cpp/TimeMeasurements.hpp"
-using namespace MTL::TimeMeasurements;
+#include "../../cpp/time/TimeMeasurements.hpp"
+using namespace MTL::time::TimeMeasurements;
 
 #include "../../cpp/thread/SpinLock.hpp"    // also provides cpu_relax() macro, which uses the x86's "pause" or arm's "yield" instructions
+using namespace MTL::thread;
 
-// compile & run with clear; echo -en "\n\n###############\n\n"; toStop="chrome vscode visual-studio-code"; for p in $toStop; do pkill -stop -f "$p"; done; sudo sync; g++ -std=c++17 -O3 -mcpu=native -march=native -mtune=native -pthread -I../../external/EABase/include/Common/ SpinLockSpikes.cpp -o SpinLockSpikes && sudo sync && sleep 2 && sudo time nice -n -20 ./SpinLockSpikes; for p in $toStop; do pkill -cont -f "$p"; done
+// compile & run with clear; echo -en "\n\n###############\n\n"; toStop="chrome vscode visual-studio-code subl3 java"; for p in $toStop; do pkill -stop -f "$p"; done; sudo sync; g++ -std=c++17 -O3 -mcpu=native -march=native -mtune=native -pthread -I../../external/EABase/include/Common/ SpinLockSpikes.cpp -o SpinLockSpikes && sudo sync && sleep 2 && sudo time nice -n -20 ./SpinLockSpikes; for p in $toStop; do pkill -cont -f "$p"; done
 
 #define DOCS "spikes on 'SpinLock'\n"                                        \
              "====================\n"                                        \
@@ -61,31 +62,8 @@ constexpr unsigned STRATEGY_FACTOR[]            = {    1,               100,    
 std::atomic<unsigned> producerCount;
 std::atomic<unsigned> consumerCount;
 
-std::atomic_bool stopConsumers           = false;
-std::atomic_int  numberOfActiveConsumers = 0;
-
-
-// mutex
-std::mutex producingMutex;
-std::mutex consumingMutex;
-
-// relax spin
-mutua::MTL::SpinLock<true> producingRelaxSpinLock;
-mutua::MTL::SpinLock<true> consumingRelaxSpinLock;
-
-// relax spin with metrics
-const char producingLockName[] = "producing lock";
-const char consumingLockName[] = "consuming lock";
-mutua::MTL::SpinLock<true, true, 0, producingLockName> producingRelaxMetricsSpinLock;
-mutua::MTL::SpinLock<true, true, 0, consumingLockName> consumingRelaxMetricsSpinLock;
-
-// relax spin falling back to system mutex
-mutua::MTL::SpinLock<true, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxMutexFallbackSpinLock;
-mutua::MTL::SpinLock<true, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxMutexFallbackSpinLock;
-
-// busy spin
-mutua::MTL::SpinLock<false> producingBusySpinLock;
-mutua::MTL::SpinLock<false> consumingBusySpinLock;
+std::atomic_bool stopConsumers           = ATOMIC_VAR_INIT(false);
+std::atomic_int  numberOfActiveConsumers = ATOMIC_VAR_INIT(0);;
 
 
 // info section
@@ -193,18 +171,20 @@ void check(unsigned& nEvents) {
 // spike methods
 ////////////////
 
+/** reset the counters and producer/consuming state */
 void reset() {
     producerCount.store(0, std::memory_order_release);
     consumerCount.store(0, std::memory_order_release);
     stopConsumers.store(false, std::memory_order_release);
     numberOfActiveConsumers.store(0, std::memory_order_release);
+}
 
+template <auto& _producingLock, auto& _consumingLock>
+/** reset for lock-based guards */
+void lockReset() {
+	reset();
     // consumers have nothing to consume until a new event arrives...
-    consumingMutex.try_lock();
-    consumingRelaxSpinLock.try_lock();
-    consumingRelaxMetricsSpinLock.try_lock();
-    consumingRelaxMutexFallbackSpinLock.try_lock();
-    consumingBusySpinLock.try_lock();
+    _consumingLock.try_lock();
 }
 
 /** works for all lock-like APIs, including mutexes and spin locks */
@@ -413,17 +393,19 @@ void linearProducerConsumer(unsigned nEvents) {
 
 
 #define STRINGFY(_str)  #_str
-#define PERFORM_MEASUREMENT(_strategyNumber, _producerFunction, _consumerFunction, _stopFunction, _debugFunction) \
+#define PERFORM_MEASUREMENT(_strategyNumber, _producerFunction, _consumerFunction, _stopFunction, _resetFunction, _debugFunction) \
         performMeasurement(_strategyNumber,                                \
                            _producerFunction, STRINGFY(_producerFunction), \
                            _consumerFunction, STRINGFY(_consumerFunction), \
                            _stopFunction,     STRINGFY(_stopFunction),     \
-                           _debugFunction,     STRINGFY(_debugFunction) )
-template <typename _ProducerFunction, typename _ConsumerFunction, typename _StopFunction, typename _DebugFunction>
+						   _resetFunction,    STRINGFY(_resetFunction),    \
+                           _debugFunction,    STRINGFY(_debugFunction) )
+template <typename _ProducerFunction, typename _ConsumerFunction, typename _StopFunction, typename _ResetFunction, typename _DebugFunction>
 void performMeasurement(unsigned strategyNumber,
                         _ProducerFunction producerFunction, string producerFunctionName,
                         _ConsumerFunction consumerFunction, string consumerFunctionName,
                         _StopFunction         stopFunction, string stopFunctionName,
+						_ResetFunction       resetFunction, string resetFunctionName,
                         _DebugFunction       debugFunction, string debugFunctionName) {
 
     // each measurement will be stored for analysis
@@ -433,7 +415,7 @@ void performMeasurement(unsigned strategyNumber,
         unsigned long long  averageEventDurationNS;
     } measurements[N_TESTS_PER_STRATEGY];
 
-    constexpr bool DEBUG_DEADLOCKS = !std::is_same_v<_DebugFunction, std::nullptr_t>;      // debug enabled when possible
+    constexpr bool DEBUG_DEADLOCKS = !std::is_same<_DebugFunction, std::nullptr_t>::value;      // debug enabled when possible
     //constexpr bool DEBUG_DEADLOCKS = false;                                                // debug disabled even if possible
 
     std::cout << "\n\nStaring the STRATEGY #" << strategyNumber << " measurements: '" << producerFunctionName << "' / '" << consumerFunctionName << "':\n";
@@ -448,7 +430,7 @@ void performMeasurement(unsigned strategyNumber,
         unsigned long long start;
         unsigned long long elapsed;
 
-        reset();
+        resetFunction();
 
         std::cout << "\t" <<
                   PAD(nTest,      5)  << "; " <<
@@ -587,21 +569,21 @@ int main(void) {
                  "min measurement: " << (cc_split-cc_finish) << "\n";
     
 
-/*    // spin lock tests
-    mutua::MTL::SpinLock spl;
-    std::cout << "Standard spinlock size: " << sizeof(spl) << "\n";
-    mutua::MTL::SpinLock<true, true> msl;
-    std::cout << "Metrics-enabled spinlock size: " << sizeof(msl) << "\n";
-    mutua::MTL::SpinLock<true, true, 2'000'000'000> dsl;    // this is 1 seconds in a 2GHz CPU
-    std::cout << "Timeout-enabled spinlock size: " << sizeof(dsl) << "\n";
+    /*// spin lock tests
+    mutua::MTL::thread::SpinLock<true, ELockSpecializations::AtomicFlag> spl;
+    std::cout << "Standard 'atomic_flag' SpinLock size: " << sizeof(spl) << "\n";
+    mutua::MTL::thread::SpinLock<true, ELockSpecializations::AtomicFlag, true> msl;
+    std::cout << "Metrics-enabled 'atomic_flag' SpinLock size: " << sizeof(msl) << "\n";
+    mutua::MTL::thread::SpinLock<true, ELockSpecializations::AtomicFlag, true, 2'000'000'000> dsl;    // this is 1 seconds in a 2GHz CPU
+    std::cout << "Timeout-enabled 'atomic_flag' SpinLock size: " << sizeof(dsl) << "\n";
     dsl.lock();
     {thread t([&dsl]{dsl.lock();dsl.unlock();});
     std::this_thread::sleep_for(std::chrono::milliseconds(3000));
     dsl.unlock();
     t.join();}
     std::cout << "--> Did you see any timeout messages above?\n";
-    mutua::MTL::SpinLock<true, true, 2'000'000'000, fslName, 4'000'000'000> fsl;    // this is 1 seconds in a 2GHz CPU
-    std::cout << "Named, Fallback-enabled spinlock size: " << sizeof(fsl) << "\n";
+    mutua::MTL::thread::SpinLock<true, ELockSpecializations::Mutex, true, 2'000'000'000, fslName, 4'000'000'000> fsl;    // this is 1 seconds in a 2GHz CPU
+    std::cout << "Named, Mutex-based (with hard-lock enabled) SpinLock size: " << sizeof(fsl) << "\n";
     fsl.lock();cerr << "<<1>>" << flush;
     {thread t([&fsl]{fsl.lock();cerr << "<<2>>" << flush;fsl.unlock();cerr << "<<3>>" << flush;});
     std::this_thread::sleep_for(std::chrono::milliseconds(8000));
@@ -610,63 +592,104 @@ int main(void) {
     t.join();cerr << "<<5>>" << flush;}
     std::cout << "--> Now lets see the real mutexes count:" << std::flush;
     fsl.issueDebugMessage("After fully unlocked...");
-    exit(0);*/
+    exit(0);//*/
 
     // template function instances
     //////////////////////////////
 
+
     // mutex
+    static std::mutex producingMutex;
+    static std::mutex consumingMutex;
     void (&mutexProducer) (unsigned) = lockProducer  <producingMutex, consumingMutex>;
     void (&mutexConsumer) ()         = lockConsumer  <producingMutex, consumingMutex>;
     void (&mutexStop)     ()         = lockStop      <producingMutex, consumingMutex>;
+    void (&mutexReset)    ()         = lockReset     <producingMutex, consumingMutex>;
     void (&mutexDebug)    ()         = debugDeadLock <producingMutex, consumingMutex, false>;
-
-    // relax spin
-    void (&relaxSpinLockProducer) (unsigned) = lockProducer  <producingRelaxSpinLock, consumingRelaxSpinLock>;
-    void (&relaxSpinLockConsumer) ()         = lockConsumer  <producingRelaxSpinLock, consumingRelaxSpinLock>;
-    void (&relaxSpinLockStop)     ()         = lockStop      <producingRelaxSpinLock, consumingRelaxSpinLock>;
-    void (&relaxSpinLockDebug)    ()         = debugDeadLock <producingRelaxSpinLock, consumingRelaxSpinLock>;
-
-    // busy spin
-    void (&busySpinLockProducer) (unsigned) = lockProducer  <producingBusySpinLock, consumingBusySpinLock>;
-    void (&busySpinLockConsumer) ()         = lockConsumer  <producingBusySpinLock, consumingBusySpinLock>;
-    void (&busySpinLockStop)     ()         = lockStop      <producingBusySpinLock, consumingBusySpinLock>;
-    void (&busySpinLockDebug)    ()         = debugDeadLock <producingBusySpinLock, consumingBusySpinLock>;
-
-    // spin with relax and metrics
-    void (&relaxMetricsSpinLockProducer) (unsigned) = lockProducer  <producingRelaxMetricsSpinLock, consumingRelaxMetricsSpinLock>;
-    void (&relaxMetricsSpinLockConsumer) ()         = lockConsumer  <producingRelaxMetricsSpinLock, consumingRelaxMetricsSpinLock>;
-    void (&relaxMetricsSpinLockStop)     ()         = lockStop      <producingRelaxMetricsSpinLock, consumingRelaxMetricsSpinLock>;
-    void (&relaxMetricsSpinLockDebug)    ()         = debugDeadLock <producingRelaxMetricsSpinLock, consumingRelaxMetricsSpinLock>;
-
-    // spin with relax and falling back to system mutex
-    void (&relaxMutexFallbackSpinLockProducer) (unsigned) = lockProducer  <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
-    void (&relaxMutexFallbackSpinLockConsumer) ()         = lockConsumer  <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
-    void (&relaxMutexFallbackSpinLockStop)     ()         = lockStop      <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
-    void (&relaxMutexFallbackSpinLockDebug)    ()         = debugDeadLock <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
-
-    void (&parallelIndependentDebug) () = debugDeadLock<producingMutex, consumingMutex, false>;
+    PERFORM_MEASUREMENT(0,                      mutexProducer,                     mutexConsumer,                      mutexStop,                       mutexReset,                       mutexDebug);
 
 
-/*    PERFORM_MEASUREMENT(0,                mutexProducer,                mutexConsumer,                 mutexStop, mutexDebug);
+    // Mutex-like SpinLock
+    // ** here is demonstrated that using 'std::mutex' or using 'mutua::MTL::thread::SpinLock<>' do produce the same code
+    static SpinLock<> producingSpinMutex;
+    static SpinLock<> consumingSpinMutex;
+    void (&SpinMutexProducer) (unsigned) = lockProducer  <producingSpinMutex, consumingSpinMutex>;
+    void (&SpinMutexConsumer) ()         = lockConsumer  <producingSpinMutex, consumingSpinMutex>;
+    void (&SpinMutexStop)     ()         = lockStop      <producingSpinMutex, consumingSpinMutex>;
+    void (&SpinMutexReset)    ()         = lockReset     <producingSpinMutex, consumingSpinMutex>;
+    void (&SpinMutexDebug)    ()         = debugDeadLock <producingSpinMutex, consumingSpinMutex, false>;
+    PERFORM_MEASUREMENT(0,                  SpinMutexProducer,                 SpinMutexConsumer,                  SpinMutexStop,                   SpinMutexReset,                   SpinMutexDebug);
 
-    PERFORM_MEASUREMENT(1,        relaxSpinLockProducer,        relaxSpinLockConsumer,         relaxSpinLockStop, relaxSpinLockDebug);
 
-    PERFORM_MEASUREMENT(1, relaxMetricsSpinLockProducer, relaxMetricsSpinLockConsumer,  relaxMetricsSpinLockStop, relaxMetricsSpinLockDebug);
-    producingRelaxMetricsSpinLock.issueDebugMessage("final statistics");
-    consumingRelaxMetricsSpinLock.issueDebugMessage("final statistics");
+/*    // relax 'atomic_flag' spin
+    // ** depending on your hardware, here is demonstrated the latency superiority of a naive spin-lock based on 'atomic_flag' using varying number of producers & consumers
+    // ** this code is known to perform poorly on OpenVZ VPS (Intel SandyBridge) as well as on Raspberry Pi 2
+    static SpinLock<true, ELockSpecializations::AtomicFlag> producingRelaxAtomicFlagSpin;
+    static SpinLock<true, ELockSpecializations::AtomicFlag> consumingRelaxAtomicFlagSpin;
+    void (&relaxAtomicFlagSpinProducer) (unsigned) = lockProducer  <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
+    void (&relaxAtomicFlagSpinConsumer) ()         = lockConsumer  <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
+    void (&relaxAtomicFlagSpinStop)     ()         = lockStop      <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
+    void (&relaxAtomicFlagSpinReset)    ()         = lockReset     <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
+    void (&relaxAtomicFlagSpinDebug)    ()         = debugDeadLock <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
+    PERFORM_MEASUREMENT(1,        relaxAtomicFlagSpinProducer,       relaxAtomicFlagSpinConsumer,        relaxAtomicFlagSpinStop,         relaxAtomicFlagSpinReset,         relaxAtomicFlagSpinDebug);
+
+    // busy 'atomic_flag' spin
+    // ** here is demonstrated the differences of not executing Intel's PAUSE (or ARM's YIELD) instruction on the 'hard_lock' loop
+    static SpinLock<false, ELockSpecializations::AtomicFlag> producingBusyAtomicFlagSpin;
+    static SpinLock<false, ELockSpecializations::AtomicFlag> consumingBusyAtomicFlagSpin;
+    void (&busyAtomicFlagSpinProducer) (unsigned) = lockProducer  <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
+    void (&busyAtomicFlagSpinConsumer) ()         = lockConsumer  <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
+    void (&busyAtomicFlagSpinStop)     ()         = lockStop      <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
+    void (&busyAtomicFlagSpinReset)    ()         = lockReset     <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
+    void (&busyAtomicFlagSpinDebug)    ()         = debugDeadLock <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
+    PERFORM_MEASUREMENT(2,         busyAtomicFlagSpinProducer,         busyAtomicFlagSpinConsumer,         busyAtomicFlagSpinStop,         busyAtomicFlagSpinReset,         busyAtomicFlagSpinDebug);
+
+/*    //  relax 'atomic_flag' spin with metrics
+    const char producingLockName[] = "producing lock";
+    const char consumingLockName[] = "consuming lock";
+    SpinLock<true, ELockSpecializations::AtomicFlag, true, 0, producingLockName> producingRelaxMetricsAtomicFlagSpin;
+    SpinLock<true, ELockSpecializations::AtomicFlag, true, 0, consumingLockName> consumingRelaxMetricsAtomicFlagSpin;
+    void (&relaxMetricsAtomicFlagSpinProducer) (unsigned) = lockProducer  <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
+    void (&relaxMetricsAtomicFlagSpinConsumer) ()         = lockConsumer  <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
+    void (&relaxMetricsAtomicFlagSpinStop)     ()         = lockStop      <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
+    void (&relaxMetricsAtomicFlagSpinReset)    ()         = lockReset     <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
+    void (&relaxMetricsAtomicFlagSpinDebug)    ()         = debugDeadLock <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
+    PERFORM_MEASUREMENT(1, relaxMetricsAtomicFlagSpinProducer, relaxMetricsAtomicFlagSpinConsumer, relaxMetricsAtomicFlagSpinStop, relaxMetricsAtomicFlagSpinReset, relaxMetricsAtomicFlagSpinDebug);
+                        producingRelaxMetricsAtomicFlagSpin.issueDebugMessage("final statistics");
+                        consumingRelaxMetricsAtomicFlagSpin.issueDebugMessage("final statistics");
+
+    //  relax 'atomic_flag' spin with 'hard_lock' fallback
+	SpinLock<true, ELockSpecializations::Mutex, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxMutexFallbackSpinLock;
+	SpinLock<true, ELockSpecializations::Mutex, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxMutexFallbackSpinLock;
+    void (&relaxMutexHardLockFallbackProducer) (unsigned) = lockProducer  <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
+    void (&relaxMutexHardLockFallbackConsumer) ()         = lockConsumer  <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
+    void (&relaxMutexHardLockFallbackStop)     ()         = lockStop      <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
+    void (&relaxMutexHardLockFallbackReset)    ()         = lockReset     <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
+    void (&relaxMutexHardLockFallbackDebug)    ()         = debugDeadLock <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
+    PERFORM_MEASUREMENT(1, relaxMutexHardLockFallbackProducer, relaxMutexHardLockFallbackConsumer,  relaxMutexHardLockFallbackStop, relaxMutexHardLockFallbackReset, relaxMutexHardLockFallbackDebug);
+                        producingRelaxMutexFallbackSpinLock.issueDebugMessage("final statistics");
+                        consumingRelaxMutexFallbackSpinLock.issueDebugMessage("final statistics");
+
 */
-    PERFORM_MEASUREMENT(1, relaxMutexFallbackSpinLockProducer, relaxMutexFallbackSpinLockConsumer,  relaxMutexFallbackSpinLockStop, relaxMutexFallbackSpinLockDebug);
-    producingRelaxMutexFallbackSpinLock.issueDebugMessage("final statistics");
-    consumingRelaxMutexFallbackSpinLock.issueDebugMessage("final statistics");
-/*
-    PERFORM_MEASUREMENT(2,         busySpinLockProducer,         busySpinLockConsumer,          busySpinLockStop, busySpinLockDebug);
+	// relax, light in Read-Modify-Write spin
+	static SpinLock<true, ELockSpecializations::RMWLight> producingRelaxRMWLightSpin;
+	static SpinLock<true, ELockSpecializations::RMWLight> consumingRelaxRMWLightSpin;
+	void (&relaxRMWLightSpinProducer) (unsigned) = lockProducer  <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
+	void (&relaxRMWLightSpinConsumer) ()         = lockConsumer  <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
+	void (&relaxRMWLightSpinStop)     ()         = lockStop      <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
+	void (&relaxRMWLightSpinReset)    ()         = lockReset     <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
+	void (&relaxRMWLightSpinDebug)    ()         = debugDeadLock <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
+	PERFORM_MEASUREMENT(1,          relaxRMWLightSpinProducer,         relaxRMWLightSpinConsumer,          relaxRMWLightSpinStop,           relaxRMWLightSpinReset,           relaxRMWLightSpinDebug);
 
-    PERFORM_MEASUREMENT(3,          relaxAtomicProducer,          relaxAtomicConsumer,           relaxAtomicStop, nullptr);
 
-    PERFORM_MEASUREMENT(4,           busyAtomicProducer,           busyAtomicConsumer,            busyAtomicStop, nullptr);
-*/
-    PERFORM_MEASUREMENT(5,  parallelIndependentProducer,  parallelIndependentConsumer,   parallelIndependentStop, parallelIndependentDebug);
+
+    PERFORM_MEASUREMENT(3,          relaxAtomicProducer,          relaxAtomicConsumer,           relaxAtomicStop, reset, nullptr);
+
+    PERFORM_MEASUREMENT(4,           busyAtomicProducer,           busyAtomicConsumer,            busyAtomicStop, reset, nullptr);
+
+
+/*    void (&parallelIndependentDebug) () = debugDeadLock<producingMutex, consumingMutex, false>;
+    PERFORM_MEASUREMENT(5,  parallelIndependentProducer,  parallelIndependentConsumer,   parallelIndependentStop, reset, parallelIndependentDebug);*/
 
 
     unsigned long long start;

@@ -9,6 +9,6 @@
 
 #include "TimeMeasurements.h"
 
-using namespace mutua::cpputils;
+using namespace MTL::time;
 
 // note: all TimeMeasurements::* functions are inlined, therefore, implemented on the .h file
