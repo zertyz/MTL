@@ -15,21 +15,12 @@
 //#include <xmmintrin.h>                        // provides _mm_pause(). This would be an alternative to boost dependency, but it only works on x86, as of aug, 2019 -- and doesn't provide _mm_yield() as well...
 using namespace std;
 
+#include "cpu_relax.h"			// provides 'cpu_relax()'
 #include "FutexAdapter.hpp"
 
 #include "../time/TimeMeasurements.hpp"
 using namespace MTL::time::TimeMeasurements;
 
-// the 'cpu_relax()' is a macro calling a specific machine instruction
-//////////////////////////////////////////////////////////////////////
-#if __x86_64
-    #define cpu_relax() asm volatile ("pause" ::: "memory");
-#elif  __arm__
-    #define cpu_relax() asm volatile ("yield" ::: "memory");
-#else
-    #error Unknown CPU
-#endif
-//////////////////////////////////////////////////////////////////////
 
 // linux kernel macros for optimizing branch instructions
 #define likely(x)       __builtin_expect((x),1)
@@ -122,6 +113,8 @@ namespace MTL::thread {
           * while preserving some power (and temperature). There is no S.O. involved here -- no context
           * switches. Typically, this produces the best latencies. */
         CPURelax,
+		/** Do `CPURelax` 10 times. */
+		CPURelax10,
         /** Asks the S.O. to give up the remaining time slice this thread still has and execute another thread
           * on the same CPU. It involves a syscall -- and, therefore, a contex-switch. It might perform better
           * on highly contended locks and on CPUs that have a very slow cache synchronization, on which
@@ -135,8 +128,16 @@ namespace MTL::thread {
             // simply don't do a thing
         } else if constexpr (_spinMethod == ESpinMethod::CPURelax) {
             cpu_relax();
+        } else if constexpr (_spinMethod == ESpinMethod::CPURelax10) {
+            static struct timespec req = {0, 1000};
+            //nanosleep(&req, (struct timespec *)NULL);
+            clock_nanosleep(CLOCK_MONOTONIC, 0, &req, nullptr);
         } else if constexpr (_spinMethod == ESpinMethod::Yield) {
-            std::this_thread::yield();
+            std::this_thread::yield();	// on linux, this is the same as calling `sched_yield()` from `sched.h`
+        	// thread yield has less overhead than any of the 'nanosleep' or 'clock_nanosleep' function, as measured circa sept, 2019.
+            //static struct timespec req = {0, 300};
+            ////nanosleep(&req, (struct timespec *)NULL);
+            //clock_nanosleep(CLOCK_MONOTONIC, 0, &req, nullptr);
         } else {
             static_assert(_spinMethod == -1, "Unknown 'ESpinMethod'. Please update the selection code.");
         }
@@ -172,6 +173,9 @@ namespace MTL::thread {
           * by using an `atomic_bool`, which allows fetching the state of the flag without modifying it. This is known to heavily improve
           * performance, in relation to @ref AtomicFlag,  on Raspberry Pi 2. */
         RMWLight,
+		/** This specialization splits the synchronization task between two different regions of memory (the "head" and the "tail"),
+		 *  obtaining speed gains on machines with a high number of CPUs (on which RMW operations can be really expensive). */
+		Ouroboros,
     };
 
     // pseudo base-class named 'LockSpecialization' used to build
@@ -187,12 +191,12 @@ namespace MTL::thread {
     // }
 
     /** 'std::mutex' based lock specialization. See more in [coco](@ref ELockSpecializations::mutex) */
-    template <bool _useRelaxInstruction>
+    template <ESpinMethod _spinMethod>
     struct MutexLockSpecialization {
-        std::mutex mutex;
+        alignas(64) std::mutex mutex;
         inline void _hard_spin() {
             while (!_try_lock()) {
-                if constexpr (_useRelaxInstruction) cpu_relax();
+            	helperESpinMethod<_spinMethod>();
             }
         }
         inline void _hard_lock() {
@@ -207,12 +211,12 @@ namespace MTL::thread {
     };
 
     /** 'MTL::thread:Futex' based lock specialization. See more in [coco](@ref ELockSpecializations::Futex) */
-    template <bool _useRelaxInstruction>
+    template <ESpinMethod _spinMethod>
     struct FutexLockSpecialization {
-        Futex futex;
+        alignas(64) Futex futex;
         inline void _hard_spin() {
             while (!_try_lock()) {
-                if constexpr (_useRelaxInstruction) cpu_relax();
+                helperESpinMethod<_spinMethod>();
             }
         }
         inline void _hard_lock() {
@@ -227,12 +231,12 @@ namespace MTL::thread {
     };
 
     /** 'atomic_flag' based lock specialization  */
-    template <bool _useRelaxInstruction>
+    template <ESpinMethod _spinMethod>
     struct AtomicFlagLockSpecialization {
-        std::atomic_flag flag = ATOMIC_FLAG_INIT;
+        alignas(64) std::atomic_flag flag = ATOMIC_FLAG_INIT;
         inline void _hard_spin() {
             while (!_try_lock()) {      // the double negation '!!' will be optimized out by the compiler
-                if constexpr (_useRelaxInstruction) cpu_relax();
+            	helperESpinMethod<_spinMethod>();
             }
         }
         inline void _hard_lock() {
@@ -246,13 +250,13 @@ namespace MTL::thread {
         }
     };
 
-    /** 'atomic_flag' based lock specialization  */
-    template <bool _useRelaxInstruction>
+    /** 'atomic_bool' based lock specialization with reduced `exchange` (Read-Modify-Write) instructions */
+    template <ESpinMethod _spinMethod>
     struct RMWLightLockSpecialization {
-        atomic_bool flag = ATOMIC_VAR_INIT(false);
+        alignas(64) atomic_bool flag = ATOMIC_VAR_INIT(false);
         inline void _hard_spin() {
             while (!_try_lock()) {      // the double negation '!!' will be optimized out by the compiler
-                if constexpr (_useRelaxInstruction) cpu_relax();
+            	helperESpinMethod<_spinMethod>();
             }
         }
         inline void _hard_lock() {
@@ -261,20 +265,44 @@ namespace MTL::thread {
         inline bool _try_lock() noexcept {
             // this conditional will only execute the RMW `exchange` instruction when the flag will be turned from `false` to `true`.
             // when already locked, it will only execute the cheaper `atomic_load` instruction.
-            return !(flag.load(std::memory_order_relaxed) || flag.exchange(true, std::memory_order_release));
+            return !(flag.load(std::memory_order_relaxed) || flag.exchange(true, std::memory_order_relaxed));
         }
         inline void _unlock() {
             flag.store(false, std::memory_order_release);
         }
     };
 
+    /** lock specialization based on two 'atomic_unsigned's, to increase performance on machines with a high number of CPUs */
+    template <ESpinMethod _spinMethod>
+    struct OuroborosLockSpecialization {
+    	alignas(64) atomic_uint lockCount   = ATOMIC_VAR_INIT(0);
+    	alignas(64) atomic_uint unlockCount = ATOMIC_VAR_INIT(0);
+        inline void _hard_spin() {
+            while (!_try_lock()) {      // the double negation '!!' will be optimized out by the compiler
+            	helperESpinMethod<_spinMethod>();
+            }
+        }
+        inline void _hard_lock() {
+            _hard_spin();
+        }
+        inline bool _try_lock() noexcept {
+            unsigned currUnlockCount = unlockCount.load(std::memory_order_relaxed);
+            return lockCount.compare_exchange_strong(currUnlockCount, currUnlockCount+1, std::memory_order_release, std::memory_order_relaxed);
+
+        }
+        inline void _unlock() {
+        	unlockCount.store(lockCount.load(std::memory_order_relaxed), std::memory_order_release);
+        }
+    };
+
     /** Type traits for returning one of the `LockSpecialization` derived classes based on provided `ELockSpecializations` enum member.
      *  (used by [SpinLock](@ref SpinLock) when determining which class should be one of it's bases) */
-    template <bool _useRelaxInstruction, ELockSpecializations _sp> struct TLockSpecialization {static_assert("false", "Unknown 'ELockSpecializations' used when attempting to get an instance of 'TLockSpecialization'. Please fix the template's type traits selection");};
-    template <bool _useRelaxInstruction> struct TLockSpecialization<_useRelaxInstruction, ELockSpecializations::Mutex>      {typedef MutexLockSpecialization<_useRelaxInstruction> type;};
-    template <bool _useRelaxInstruction> struct TLockSpecialization<_useRelaxInstruction, ELockSpecializations::Futex>      {typedef FutexLockSpecialization<_useRelaxInstruction> type;};
-    template <bool _useRelaxInstruction> struct TLockSpecialization<_useRelaxInstruction, ELockSpecializations::AtomicFlag> {typedef AtomicFlagLockSpecialization<_useRelaxInstruction> type;};
-    template <bool _useRelaxInstruction> struct TLockSpecialization<_useRelaxInstruction, ELockSpecializations::RMWLight>   {typedef RMWLightLockSpecialization<_useRelaxInstruction> type;};
+    template <ESpinMethod _spinMethod, ELockSpecializations _sp> struct TLockSpecialization {static_assert("false", "Unknown 'ELockSpecializations' used when attempting to get an instance of 'TLockSpecialization'. Please fix the template's type traits selection");};
+    template <ESpinMethod _spinMethod> struct TLockSpecialization<_spinMethod, ELockSpecializations::Mutex>      {typedef MutexLockSpecialization     <_spinMethod> type;};
+    template <ESpinMethod _spinMethod> struct TLockSpecialization<_spinMethod, ELockSpecializations::Futex>      {typedef FutexLockSpecialization     <_spinMethod> type;};
+    template <ESpinMethod _spinMethod> struct TLockSpecialization<_spinMethod, ELockSpecializations::AtomicFlag> {typedef AtomicFlagLockSpecialization<_spinMethod> type;};
+    template <ESpinMethod _spinMethod> struct TLockSpecialization<_spinMethod, ELockSpecializations::RMWLight>   {typedef RMWLightLockSpecialization  <_spinMethod> type;};
+    template <ESpinMethod _spinMethod> struct TLockSpecialization<_spinMethod, ELockSpecializations::Ouroboros>  {typedef OuroborosLockSpecialization <_spinMethod> type;};
 
 
     /**
@@ -294,11 +322,13 @@ namespace MTL::thread {
      *
     */
     template<
-             /** when true, use the PAUSE (x86) or YIELD (arm) instruction, in attempt to
-               * instruct the CORE to give priority to another CPU doing useful work or
-               * save some power */
-             bool  _useRelaxInstruction = true,
-             /** Specifies which code's critical session guarding strategy to use */
+             /** when spinning, what should be done between checks?
+              *  Defaults to `cpu_relax()`, which translates to the PAUSE (x86) or
+              *  YIELD (arm) instruction */
+	         ESpinMethod _spinMethod = ESpinMethod::CPURelax,
+             /** Specifies which code's critical session guarding strategy to use.
+              *  Defaults to `Mutex`, supported and fully tested on all platforms,
+              *  at the cost of a high latency, when compared to the other options. */
              ELockSpecializations _lockStrategy = ELockSpecializations::Mutex,
              /** when true, provides some operational metrics to keep track of how many
                * times and how many CPU Cycles where spent:
@@ -330,7 +360,7 @@ namespace MTL::thread {
              SpinLockCallbackSignature _instrumentMutexLockCallback = nullptr>   // enable to output to stderr debug information & activelly check for reentrancy errors
     class SpinLock
               /*** CONDITIONAL BASE CLASSES DECLARATION -- in order to allow conditional fields ***/
-              : TLockSpecialization<_useRelaxInstruction, _lockStrategy>::type
+              : TLockSpecialization<_spinMethod, _lockStrategy>::type
 //              // which lock to use? spin (atomic_flag) or system mutex?
 //              : std::conditional<isMutexFallbackEnabled<_mutexFallbackAfterCycles>(),             MutexLockSpecialization<_useRelaxInstruction>,   AtomicFlagLockSpecialization<_useRelaxInstruction>>::type
               // additional class fields based on template parameters
@@ -345,9 +375,6 @@ namespace MTL::thread {
                                                            ( (_debugAfterCycles > 0)            || (_hardLockFallbackAfterCycles > 0) );                   // one of them implies waiting non-zero time
         /** specifies if pre and/or post code must be included to compute the usage this lock */
         static constexpr bool doCollectStandardMetrics   = _opMetrics;
-        /** when doing a controlled spin and not using a System Mutex (_mutexFallbackAfterCycles == -1), this instructs any
-         *  spin (both controlled or performing a hard lock) to use the PAUSE x86's assembly instruction or ARM's YIELD */
-        static constexpr bool doUseRelaxInstruction      = _useRelaxInstruction;
         /** candidate for removal -- since we may now compute 'hardLocks' on any 'XXXXSpecialization' class */
         static constexpr bool doCollectHardLockMetrics   = isHardLockMetricsEnabled<_opMetrics, _hardLockFallbackAfterCycles>();
         /** should we account for "spinning for too long" situations? */
@@ -364,16 +391,16 @@ namespace MTL::thread {
         //       Will them still be needed in C++20?
         //       Anyways, they don't incur in additional code at all
         inline void _hard_spin() {
-            TLockSpecialization<_useRelaxInstruction, _lockStrategy>::type::_hard_spin();
+            TLockSpecialization<_spinMethod, _lockStrategy>::type::_hard_spin();
         }
         inline void _hard_lock() {
-            TLockSpecialization<_useRelaxInstruction, _lockStrategy>::type::_hard_lock();
+            TLockSpecialization<_spinMethod, _lockStrategy>::type::_hard_lock();
         }
         inline bool _try_lock() noexcept {
-            return TLockSpecialization<_useRelaxInstruction, _lockStrategy>::type::_try_lock();
+            return TLockSpecialization<_spinMethod, _lockStrategy>::type::_try_lock();
         }
         inline void _unlock() {
-            TLockSpecialization<_useRelaxInstruction, _lockStrategy>::type::_unlock();
+            TLockSpecialization<_spinMethod, _lockStrategy>::type::_unlock();
         }
 
 
@@ -454,9 +481,8 @@ namespace MTL::thread {
                 // do the following until we may acquire the lock...
                 while (!_try_lock())  {
 
-                    // calls PAUSE or YIELD instruction, releasing the core to another CPU without context switching
-                    // (else just do a normal busy wait)
-                    if constexpr (doUseRelaxInstruction) cpu_relax();
+                    // Do something while spinning: `cpu_relax()`, yield to another thread or simply do nothing (to test again as soon as possible)
+                	helperESpinMethod<_spinMethod>();
 
                     // spin timeouts & hard_lock fall back optional codes
                     if constexpr (doDebugSpinTimeouts || doHardLockFallback) {
