@@ -7,7 +7,7 @@
 #include <time.h>
 #include <sys/time.h>
 
-#include "TimeMeasurements.h"
+#include "TimeMeasurements.hpp"
 
 using namespace MTL::time;
 

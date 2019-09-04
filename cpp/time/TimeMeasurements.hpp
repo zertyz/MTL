@@ -7,11 +7,16 @@
 /**
  * TimeMeasurements.hpp
  * ====================
- * created by luiz, Sep 19, 2019
+ * created by luiz, Sep 19, 2018
  *
  * Elapsed Real Time measurement functions -- milli, micro, nano and even less seconds.
  *
- * With the exception of 'getProcessorCycleCount', no other function here is reentrant. */
+ * With the exception of 'getProcessorCycleCount', no other function here is reentrant.
+ *
+ * NOTE: arm code gathered from
+ * https://stackoverflow.com/questions/3247373/how-to-measure-program-execution-time-in-arm-cortex-a8-processor?answertab=active#tab-top
+ * https://matthewarcus.wordpress.com/2018/01/27/using-the-cycle-counter-registers-on-the-raspberry-pi-3/
+ * */
 namespace MTL::time::TimeMeasurements {
 
     static inline unsigned long long getRealTimeMS();
@@ -34,12 +39,54 @@ namespace MTL::time::TimeMeasurements {
       *       due to turbo); */
     static inline uint64_t getProcessorCycleCount();
 
+    /** initialization for 'getProcessorCycleCount' needed by ARM */
+    static inline unsigned armClockInit();
+    static unsigned _armClockInit = armClockInit();
+
 }
 
 
 // scoped functions definitions
 using namespace MTL::time;
 
+static inline unsigned TimeMeasurements::armClockInit() {
+
+	#if __arm__
+
+		// this code will be executed if we are in an ARM computer.
+		// it's execution is guranteed by the initialization of the
+		// static variable '_armClockInit'
+
+		// in general enable all counters (including cycle counter)
+		int32_t value = 1;
+
+		// perform reset:
+		if (/*do_reset || */true) {
+			value |= 2;     // reset all counters to zero.
+			value |= 4;     // reset cycle counter to zero.
+		}
+
+		if (/*enable_divider || */true) {
+			value |= 8;     // enable "by 64" divider for CCNT, making the 32bit overflow 64 times less likely.
+		}
+
+		value |= 16;
+
+		// program the performance-counter control-register:
+		asm volatile ("MCR p15, 0, %0, c9, c12, 0\t\n" :: "r"(value));
+
+		// enable all counters:
+		asm volatile ("MCR p15, 0, %0, c9, c12, 1\t\n" :: "r"(0x8000000f));
+
+		// clear overflows:
+		asm volatile ("MCR p15, 0, %0, c9, c12, 3\t\n" :: "r"(0x8000000f));
+
+		return 42;	// can be any number...
+
+	#else
+		return 0;
+	#endif
+}
 
 static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
     
@@ -52,35 +99,6 @@ static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
 
     // arm
     #elif __arm__
-        // from -- https://stackoverflow.com/questions/3247373/how-to-measure-program-execution-time-in-arm-cortex-a8-processor?answertab=active#tab-top
-        static bool init = false;
-        if (!init) {
-            // in general enable all counters (including cycle counter)
-            int32_t value = 1;
-
-            // peform reset:  
-            if (/*do_reset || */true) {
-                value |= 2;     // reset all counters to zero.
-                value |= 4;     // reset cycle counter to zero.
-            } 
-
-            if (/*enable_divider || */true) {
-                value |= 8;     // enable "by 64" divider for CCNT.
-            }
-
-            value |= 16;
-
-            // program the performance-counter control-register:
-            asm volatile ("MCR p15, 0, %0, c9, c12, 0\t\n" :: "r"(value));  
-
-            // enable all counters:  
-            asm volatile ("MCR p15, 0, %0, c9, c12, 1\t\n" :: "r"(0x8000000f));  
-
-            // clear overflows:
-            asm volatile ("MCR p15, 0, %0, c9, c12, 3\t\n" :: "r"(0x8000000f));
-            init = true;
-        }
-
         unsigned int value;
         // Read CCNT Register
         asm volatile ("MRC p15, 0, %0, c9, c13, 0\t\n": "=r"(value));  
