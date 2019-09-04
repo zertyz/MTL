@@ -64,12 +64,11 @@ namespace MTL::thread {
 
 		inline bool try_lock() {
 			int32_t value = 0;
-			return (futexWord.load(std::memory_order_relaxed) == 0) && futexWord.compare_exchange_strong(value, 1, std::memory_order_release, std::memory_order_relaxed);
+			return futexWord.compare_exchange_strong(value, 1, std::memory_order_relaxed, std::memory_order_relaxed);
 		}
 
 		inline void unlock() {
-			if (futexWord.fetch_sub(1, std::memory_order_release) != 1) {
-				futexWord.store(0, std::memory_order_release);
+			if (futexWord.exchange(0, std::memory_order_relaxed) == 2) {
 				::syscall(SYS_futex, static_cast<void*>(&futexWord), FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
 			}
 		}
