@@ -226,7 +226,7 @@ void debugDeadLock() {
             break;
         }
         if ((currentProducerCount == lastProducerCount) || (currentConsumerCount == lastConsumerCount)) {
-            std::cerr << "\n\n--> 'debugDeadLock()' detected a dead lock! Dumping semaphores...\n" << std::flush;
+            std::cerr << "\n\n--> 'debugDeadLock()' detected a dead lock with still " << numberOfActiveConsumers << " active consumers! Dumping semaphores...\n" << std::flush;
             if constexpr ( _isInstanceOfSpinLock /* how to detect it automatically?? */ ) {
                 _producingLock.issueDebugMessage("producing lock metrics");
                 _consumingLock.issueDebugMessage("consuming lock metrics");
@@ -260,12 +260,13 @@ void lockConsumer() {
     numberOfActiveConsumers.fetch_sub(1, std::memory_order_relaxed);
 }
 
+
 void relaxAtomicProducer(unsigned nEvents) {
     for (unsigned i=0; i<nEvents; i++) {
         unsigned currentProducerCount = producerCount.load(std::memory_order_relaxed);
-        while (!producerCount.compare_exchange_weak(currentProducerCount, currentProducerCount+1,
-                                                    std::memory_order_release,
-                                                    std::memory_order_relaxed)) {
+        while (!producerCount.compare_exchange_strong(currentProducerCount, currentProducerCount+1,
+                                                      std::memory_order_release,
+                                                      std::memory_order_relaxed)) {
             cpu_relax();
         }
         // wait until the event is consumed before passing on to the next one -- remember we are measuring the latency, not the throughput
@@ -292,9 +293,9 @@ void relaxAtomicConsumer() {
         if (currentConsumerCount < producerCount.load(std::memory_order_relaxed)) {
 
             // try to consume it
-            if (consumerCount.compare_exchange_weak(currentConsumerCount, currentConsumerCount+1,
-                                                    std::memory_order_release,
-                                                    std::memory_order_relaxed)) {
+            if (consumerCount.compare_exchange_strong(currentConsumerCount, currentConsumerCount+1,
+                                                      std::memory_order_release,
+                                                       std::memory_order_relaxed)) {
                 // yeah! authorization to consume acquired (the counter was already increased)
             } else {
                 cpu_relax();
@@ -350,48 +351,59 @@ void busyAtomicConsumer() {
     numberOfActiveConsumers.fetch_sub(1, std::memory_order_relaxed);
 }
 
-
-atomic_flag flag;
-atomic_int flag2 = 1;
-atomic_bool flag3 = false;
-alignas(64) atomic_uint ilock = 0;
-alignas(64) atomic_uint iunlock = 0;
+/** how many events ahead of the consumer may be generated */
+constexpr unsigned queueSize = 10000;
 void parallelIndependentProducer(unsigned nEvents) {
+    // simulates the work the others producers / consumers do: simply increase their counters
     for (unsigned i=0; i<nEvents; i++) {
-        //while (flag.test_and_set(std::memory_order_relaxed)) ;
-        //while (flag2.fetch_add(1, std::memory_order_acq_rel) > 0) ;
-        while (flag3.load(std::memory_order_relaxed) || flag3.exchange(true, std::memory_order_release)) cpu_relax();
-        //for (unsigned currunlock = iunlock.load(std::memory_order_relaxed);
-        //     !ilock.compare_exchange_weak(currunlock, currunlock+1, std::memory_order_release, std::memory_order_relaxed);
-        //     currunlock = iunlock.load(std::memory_order_relaxed)) cpu_relax();
-        producerCount.fetch_add(1, std::memory_order_release);
+    	// producing code...
+        // after the event has been produced, the code bellow propagates it. 'currProducerCount' will be the event id
+		unsigned currProducerCount;			// at the end of the loop, this is the 'event number' produced
+    	do {
+    		unsigned currConsumerCount = consumerCount.load(std::memory_order_relaxed);
+    		currProducerCount = producerCount.load(std::memory_order_relaxed);	// this must be inside the loop for the case of multiple producers
+    		if ( (currProducerCount-currConsumerCount < queueSize) &&
+    			 (producerCount.compare_exchange_strong(currProducerCount, currProducerCount+1, std::memory_order_release, std::memory_order_relaxed)) ) {
+    			break;
+    		} else {
+    			cpu_relax();
+    		}
+    	} while (true);
+
+    	// event produced
     }
 }
 
 void parallelIndependentStop() {
-    unsigned count = producerCount.load(std::memory_order_acquire);
-    // wait for all events to be consumed
-    while (consumerCount.load(std::memory_order_acquire) < count) {
-        std::this_thread::yield();
-    }
     stopConsumers.store(true, std::memory_order_release);
-    while (numberOfActiveConsumers.load(std::memory_order_acquire) > 0) ;
+    // wait for consumers to exit
+    while (numberOfActiveConsumers.load(std::memory_order_relaxed) > 0) cpu_relax();
 }
 
 void parallelIndependentConsumer() {
-    numberOfActiveConsumers.fetch_add(1, std::memory_order_acq_rel);
+    numberOfActiveConsumers.fetch_add(1, std::memory_order_release);
     while (true) {
-        if (consumerCount.fetch_add(1, std::memory_order_acq_rel) >= producerCount.load(std::memory_order_acquire)) {
-            consumerCount.fetch_sub(1, std::memory_order_release);
-        }
-        if (stopConsumers.load(std::memory_order_acquire)) {
-            break;
-        }
-        //flag.clear(std::memory_order_release);
-        //flag2.store(0, std::memory_order_release);
-        flag3.store(false, std::memory_order_release);
-        //iunlock.store(ilock.load(std::memory_order_relaxed), std::memory_order_release);
+
+    	// wait for the authorization to consume
+		unsigned currConsumerCount;		// at the end of the loop, this is the 'event number' consumed
+    	do {
+    		unsigned currProducerCount = producerCount.load(std::memory_order_relaxed);
+    		currConsumerCount = consumerCount.load(std::memory_order_relaxed);
+    		if ( (currProducerCount > currConsumerCount) &&
+    			 (consumerCount.compare_exchange_strong(currConsumerCount, currConsumerCount+1, std::memory_order_release, std::memory_order_relaxed)) ) {
+    			break;
+    		} else {
+                if (unlikely (stopConsumers.load(std::memory_order_relaxed)) ) {
+                	goto LOOP_DONE;	// break the main loop
+                }
+    			cpu_relax();
+    		}
+
+    	} while (true);
+
+        // event ready to be consumed (counters already updated). The consuming code goes below:
     }
+LOOP_DONE:
     numberOfActiveConsumers.fetch_sub(1, std::memory_order_release);
 }
 
@@ -611,7 +623,7 @@ int main(void) {
     //////////////////////////////
 
 
-    // mutex
+/*    // mutex
     static std::mutex producingMutex;
     static std::mutex consumingMutex;
     void (&mutexProducer) (unsigned) = lockProducer  <producingMutex, consumingMutex>;
@@ -633,7 +645,7 @@ int main(void) {
     PERFORM_MEASUREMENT(0,                      futexProducer,                     futexConsumer,                      futexStop,                       futexReset,                       futexDebug);
 
 
-/*    // Mutex-based SpinLock
+    // Mutex-based SpinLock
     // ** here is demonstrated that using 'std::mutex' or using 'mutua::MTL::thread::SpinLock<>' do produce the same code
     static SpinLock<> producingSpinMutex;
     static SpinLock<> consumingSpinMutex;
@@ -641,7 +653,7 @@ int main(void) {
     void (&SpinMutexConsumer) ()         = lockConsumer  <producingSpinMutex, consumingSpinMutex>;
     void (&SpinMutexStop)     ()         = lockStop      <producingSpinMutex, consumingSpinMutex>;
     void (&SpinMutexReset)    ()         = lockReset     <producingSpinMutex, consumingSpinMutex>;
-    void (&SpinMutexDebug)    ()         = debugDeadLock <producingSpinMutex, consumingSpinMutex, false>;
+    void (&SpinMutexDebug)    ()         = debugDeadLock <producingSpinMutex, consumingSpinMutex>;
     PERFORM_MEASUREMENT(0,                  SpinMutexProducer,                 SpinMutexConsumer,                  SpinMutexStop,                   SpinMutexReset,                   SpinMutexDebug);
 
 
@@ -657,7 +669,7 @@ int main(void) {
     void (&relaxAtomicFlagSpinDebug)    ()         = debugDeadLock <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
     PERFORM_MEASUREMENT(1,        relaxAtomicFlagSpinProducer,       relaxAtomicFlagSpinConsumer,        relaxAtomicFlagSpinStop,         relaxAtomicFlagSpinReset,         relaxAtomicFlagSpinDebug);
 
-/*    // busy 'atomic_flag' spin
+    // busy 'atomic_flag' spin
     // ** here is demonstrated the differences of not executing Intel's PAUSE (or ARM's YIELD) instruction on the 'hard_lock' loop
     static SpinLock<false, ELockSpecializations::AtomicFlag> producingBusyAtomicFlagSpin;
     static SpinLock<false, ELockSpecializations::AtomicFlag> consumingBusyAtomicFlagSpin;
@@ -668,7 +680,7 @@ int main(void) {
     void (&busyAtomicFlagSpinDebug)    ()         = debugDeadLock <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
     PERFORM_MEASUREMENT(2,         busyAtomicFlagSpinProducer,         busyAtomicFlagSpinConsumer,         busyAtomicFlagSpinStop,         busyAtomicFlagSpinReset,         busyAtomicFlagSpinDebug);
 
-/*    //  relax 'atomic_flag' spin with metrics
+    //  relax 'atomic_flag' spin with metrics
     const char producingLockName[] = "producing lock";
     const char consumingLockName[] = "consuming lock";
     SpinLock<true, ELockSpecializations::AtomicFlag, true, 0, producingLockName> producingRelaxMetricsAtomicFlagSpin;
@@ -681,12 +693,25 @@ int main(void) {
     PERFORM_MEASUREMENT(1, relaxMetricsAtomicFlagSpinProducer, relaxMetricsAtomicFlagSpinConsumer, relaxMetricsAtomicFlagSpinStop, relaxMetricsAtomicFlagSpinReset, relaxMetricsAtomicFlagSpinDebug);
                         producingRelaxMetricsAtomicFlagSpin.issueDebugMessage("final statistics");
                         consumingRelaxMetricsAtomicFlagSpin.issueDebugMessage("final statistics");
-*/
-    //  relax 'futex' spin with 'hard_lock' (spinless) fallback
+
+    //  relax 'Ouroboros' spin with 'hard_lock' (spinless) fallback
     static const char producingLockName[] = "producing lock";
     static const char consumingLockName[] = "consuming lock";
-	static SpinLock<true, ELockSpecializations::Futex, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxFutexFallbackSpinLock;
-	static SpinLock<true, ELockSpecializations::Futex, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxFutexFallbackSpinLock;
+	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Ouroboros, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxOuroborosFallbackSpinLock;
+	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Ouroboros, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxOuroborosFallbackSpinLock;
+    void (&relaxOuroborosHardLockFallbackProducer) (unsigned) = lockProducer  <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
+    void (&relaxOuroborosHardLockFallbackConsumer) ()         = lockConsumer  <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
+    void (&relaxOuroborosHardLockFallbackStop)     ()         = lockStop      <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
+    void (&relaxOuroborosHardLockFallbackReset)    ()         = lockReset     <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
+    void (&relaxOuroborosHardLockFallbackDebug)    ()         = debugDeadLock <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
+    PERFORM_MEASUREMENT(0, relaxOuroborosHardLockFallbackProducer, relaxOuroborosHardLockFallbackConsumer,  relaxOuroborosHardLockFallbackStop, relaxOuroborosHardLockFallbackReset, relaxOuroborosHardLockFallbackDebug);
+                        producingRelaxOuroborosFallbackSpinLock.issueDebugMessage("final statistics");
+                        consumingRelaxOuroborosFallbackSpinLock.issueDebugMessage("final statistics");
+
+
+    //  relax 'futex' spin with 'hard_lock' (spinless) fallback
+	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Futex, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxFutexFallbackSpinLock;
+	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Futex, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxFutexFallbackSpinLock;
     void (&relaxFutexHardLockFallbackProducer) (unsigned) = lockProducer  <producingRelaxFutexFallbackSpinLock, consumingRelaxFutexFallbackSpinLock>;
     void (&relaxFutexHardLockFallbackConsumer) ()         = lockConsumer  <producingRelaxFutexFallbackSpinLock, consumingRelaxFutexFallbackSpinLock>;
     void (&relaxFutexHardLockFallbackStop)     ()         = lockStop      <producingRelaxFutexFallbackSpinLock, consumingRelaxFutexFallbackSpinLock>;
@@ -698,8 +723,8 @@ int main(void) {
 
 
     //  relax 'mutex' spin with 'hard_lock' (spinless) fallback
-    static SpinLock<true, ELockSpecializations::Mutex, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxMutexFallbackSpinLock;
-    static SpinLock<true, ELockSpecializations::Mutex, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxMutexFallbackSpinLock;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Mutex, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxMutexFallbackSpinLock;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Mutex, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxMutexFallbackSpinLock;
     void (&relaxMutexHardLockFallbackProducer) (unsigned) = lockProducer  <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
     void (&relaxMutexHardLockFallbackConsumer) ()         = lockConsumer  <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
     void (&relaxMutexHardLockFallbackStop)     ()         = lockStop      <producingRelaxMutexFallbackSpinLock, consumingRelaxMutexFallbackSpinLock>;
@@ -711,8 +736,8 @@ int main(void) {
 
 
 	// relax, light in Read-Modify-Write spin
-	static SpinLock<true, ELockSpecializations::RMWLight> producingRelaxRMWLightSpin;
-	static SpinLock<true, ELockSpecializations::RMWLight> consumingRelaxRMWLightSpin;
+	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::RMWLight> producingRelaxRMWLightSpin;
+	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::RMWLight> consumingRelaxRMWLightSpin;
 	void (&relaxRMWLightSpinProducer) (unsigned) = lockProducer  <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
 	void (&relaxRMWLightSpinConsumer) ()         = lockConsumer  <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
 	void (&relaxRMWLightSpinStop)     ()         = lockStop      <producingRelaxRMWLightSpin, consumingRelaxRMWLightSpin>;
@@ -721,14 +746,13 @@ int main(void) {
 	PERFORM_MEASUREMENT(1,          relaxRMWLightSpinProducer,         relaxRMWLightSpinConsumer,          relaxRMWLightSpinStop,           relaxRMWLightSpinReset,           relaxRMWLightSpinDebug);
 
 
+*/
+    static unsigned debugVal;
+	void (&genericDebug)() = debugDeadLock <debugVal, debugVal, false>;
+//    PERFORM_MEASUREMENT(3,          relaxAtomicProducer,          relaxAtomicConsumer,           relaxAtomicStop, reset, genericDebug);
+//    PERFORM_MEASUREMENT(4,           busyAtomicProducer,           busyAtomicConsumer,            busyAtomicStop, reset, genericDebug);
 
-    PERFORM_MEASUREMENT(3,          relaxAtomicProducer,          relaxAtomicConsumer,           relaxAtomicStop, reset, nullptr);
-
-    PERFORM_MEASUREMENT(4,           busyAtomicProducer,           busyAtomicConsumer,            busyAtomicStop, reset, nullptr);
-
-
-/*    void (&parallelIndependentDebug) () = debugDeadLock<producingMutex, consumingMutex, false>;
-    PERFORM_MEASUREMENT(5,  parallelIndependentProducer,  parallelIndependentConsumer,   parallelIndependentStop, reset, parallelIndependentDebug);*/
+    PERFORM_MEASUREMENT(5,  parallelIndependentProducer,  parallelIndependentConsumer,   parallelIndependentStop, reset, genericDebug);
 
 
     unsigned long long start;
