@@ -7,6 +7,8 @@
 #include <mutex>
 using namespace std;
 
+#include "../thread/cpu_relax.h"			// provides 'cpu_relax()'
+
 // linux kernel macros for optimizing branch instructions
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -142,6 +144,9 @@ namespace mutua::MTL::stack {
                     pushCollisions.fetch_add(1, memory_order_relaxed);
                 }
 
+                // wait a little before a retry -- preserving CPU resources
+                cpu_relax();
+
             }
 
             // debug
@@ -203,8 +208,12 @@ namespace mutua::MTL::stack {
                                                               memory_order_release,
                                                               memory_order_relaxed))) {
                     break;
-                } else if constexpr (_ColMetrics) {
-                    popCollisions.fetch_add(1, memory_order_relaxed);
+                } else {
+                	if constexpr (_ColMetrics) {
+						popCollisions.fetch_add(1, memory_order_relaxed);
+					}
+                    // wait a little before a retry -- preserving CPU resources
+                    cpu_relax();
                 }
             } while (true);
 
