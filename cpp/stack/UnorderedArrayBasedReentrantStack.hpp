@@ -38,7 +38,7 @@ namespace mutua::MTL::stack {
      * created by luiz, Aug 18, 2019
      *
      * Provides a stack with the following attributes:
-     *   - Lock-free (no mutexes or spin locks) yet fully reentrant -- multiple threads may push and pop simultaneously
+     *   - Lock-free (no mutexes or context-switches) yet fully reentrant -- multiple threads may push and pop simultaneously
      *   - All slots are members of a provided array -- the whole structure may be "mmap-ped"
      *   - Stack entries are "unordered" -- they may be added in any order, independent from the array's natural element order.
      *     This implies that the stack entries must have an "unsigned next" field, serving as a pointer to the next stack member:
@@ -160,8 +160,9 @@ namespace mutua::MTL::stack {
 
         }
 
-        /** pops the head of the stack -- returning a pointer to one of the elements of the 'backingArray'.
-         *  Returns 'nullptr' if the stack is empty */
+        /** pops the head of the stack -- returning the index to one of the elements of the 'backingArray'
+          * & pointing `headSlot` to that slot.
+         *  Returns '-1' if the stack is empty, in which case `headSlot` is also set to `nullptr` */
         inline unsigned pop(_BackingArrayElementType** headSlot) {
 
             alignas(sizeof(unsigned)*2) AtomicPointer currentHead;
