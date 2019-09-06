@@ -623,7 +623,7 @@ int main(void) {
     //////////////////////////////
 
 
-/*    // mutex
+    // mutex
     static std::mutex producingMutex;
     static std::mutex consumingMutex;
     void (&mutexProducer) (unsigned) = lockProducer  <producingMutex, consumingMutex>;
@@ -649,19 +649,19 @@ int main(void) {
     // ** here is demonstrated that using 'std::mutex' or using 'mutua::MTL::thread::SpinLock<>' do produce the same code
     static SpinLock<> producingSpinMutex;
     static SpinLock<> consumingSpinMutex;
-    void (&SpinMutexProducer) (unsigned) = lockProducer  <producingSpinMutex, consumingSpinMutex>;
-    void (&SpinMutexConsumer) ()         = lockConsumer  <producingSpinMutex, consumingSpinMutex>;
-    void (&SpinMutexStop)     ()         = lockStop      <producingSpinMutex, consumingSpinMutex>;
-    void (&SpinMutexReset)    ()         = lockReset     <producingSpinMutex, consumingSpinMutex>;
-    void (&SpinMutexDebug)    ()         = debugDeadLock <producingSpinMutex, consumingSpinMutex>;
-    PERFORM_MEASUREMENT(0,                  SpinMutexProducer,                 SpinMutexConsumer,                  SpinMutexStop,                   SpinMutexReset,                   SpinMutexDebug);
+    void (&spinMutexProducer) (unsigned) = lockProducer  <producingSpinMutex, consumingSpinMutex>;
+    void (&spinMutexConsumer) ()         = lockConsumer  <producingSpinMutex, consumingSpinMutex>;
+    void (&spinMutexStop)     ()         = lockStop      <producingSpinMutex, consumingSpinMutex>;
+    void (&spinMutexReset)    ()         = lockReset     <producingSpinMutex, consumingSpinMutex>;
+    void (&spinMutexDebug)    ()         = debugDeadLock <producingSpinMutex, consumingSpinMutex>;
+    PERFORM_MEASUREMENT(0,                  spinMutexProducer,                 spinMutexConsumer,                  spinMutexStop,                   spinMutexReset,                   spinMutexDebug);
 
 
     // relax 'atomic_flag' spin
     // ** depending on your hardware, here is demonstrated the latency superiority of a naive spin-lock based on 'atomic_flag' using varying number of producers & consumers
     // ** this code is known to perform poorly on OpenVZ VPS (Intel SandyBridge) as well as on Raspberry Pi 2
-    static SpinLock<true, ELockSpecializations::AtomicFlag> producingRelaxAtomicFlagSpin;
-    static SpinLock<true, ELockSpecializations::AtomicFlag> consumingRelaxAtomicFlagSpin;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::AtomicFlag> producingRelaxAtomicFlagSpin;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::AtomicFlag> consumingRelaxAtomicFlagSpin;
     void (&relaxAtomicFlagSpinProducer) (unsigned) = lockProducer  <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
     void (&relaxAtomicFlagSpinConsumer) ()         = lockConsumer  <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
     void (&relaxAtomicFlagSpinStop)     ()         = lockStop      <producingRelaxAtomicFlagSpin, consumingRelaxAtomicFlagSpin>;
@@ -671,8 +671,8 @@ int main(void) {
 
     // busy 'atomic_flag' spin
     // ** here is demonstrated the differences of not executing Intel's PAUSE (or ARM's YIELD) instruction on the 'hard_lock' loop
-    static SpinLock<false, ELockSpecializations::AtomicFlag> producingBusyAtomicFlagSpin;
-    static SpinLock<false, ELockSpecializations::AtomicFlag> consumingBusyAtomicFlagSpin;
+    static SpinLock<ESpinMethod::NoOp, ELockSpecializations::AtomicFlag> producingBusyAtomicFlagSpin;
+    static SpinLock<ESpinMethod::NoOp, ELockSpecializations::AtomicFlag> consumingBusyAtomicFlagSpin;
     void (&busyAtomicFlagSpinProducer) (unsigned) = lockProducer  <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
     void (&busyAtomicFlagSpinConsumer) ()         = lockConsumer  <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
     void (&busyAtomicFlagSpinStop)     ()         = lockStop      <producingBusyAtomicFlagSpin, consumingBusyAtomicFlagSpin>;
@@ -681,10 +681,10 @@ int main(void) {
     PERFORM_MEASUREMENT(2,         busyAtomicFlagSpinProducer,         busyAtomicFlagSpinConsumer,         busyAtomicFlagSpinStop,         busyAtomicFlagSpinReset,         busyAtomicFlagSpinDebug);
 
     //  relax 'atomic_flag' spin with metrics
-    const char producingLockName[] = "producing lock";
-    const char consumingLockName[] = "consuming lock";
-    SpinLock<true, ELockSpecializations::AtomicFlag, true, 0, producingLockName> producingRelaxMetricsAtomicFlagSpin;
-    SpinLock<true, ELockSpecializations::AtomicFlag, true, 0, consumingLockName> consumingRelaxMetricsAtomicFlagSpin;
+    static const char producingLockName[] = "producing lock";
+    static const char consumingLockName[] = "consuming lock";
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::AtomicFlag, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxMetricsAtomicFlagSpin;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::AtomicFlag, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxMetricsAtomicFlagSpin;
     void (&relaxMetricsAtomicFlagSpinProducer) (unsigned) = lockProducer  <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
     void (&relaxMetricsAtomicFlagSpinConsumer) ()         = lockConsumer  <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
     void (&relaxMetricsAtomicFlagSpinStop)     ()         = lockStop      <producingRelaxMetricsAtomicFlagSpin, consumingRelaxMetricsAtomicFlagSpin>;
@@ -695,10 +695,8 @@ int main(void) {
                         consumingRelaxMetricsAtomicFlagSpin.issueDebugMessage("final statistics");
 
     //  relax 'Ouroboros' spin with 'hard_lock' (spinless) fallback
-    static const char producingLockName[] = "producing lock";
-    static const char consumingLockName[] = "consuming lock";
-	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Ouroboros, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxOuroborosFallbackSpinLock;
-	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Ouroboros, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxOuroborosFallbackSpinLock;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Ouroboros, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxOuroborosFallbackSpinLock;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Ouroboros, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxOuroborosFallbackSpinLock;
     void (&relaxOuroborosHardLockFallbackProducer) (unsigned) = lockProducer  <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
     void (&relaxOuroborosHardLockFallbackConsumer) ()         = lockConsumer  <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
     void (&relaxOuroborosHardLockFallbackStop)     ()         = lockStop      <producingRelaxOuroborosFallbackSpinLock, consumingRelaxOuroborosFallbackSpinLock>;
@@ -710,8 +708,8 @@ int main(void) {
 
 
     //  relax 'futex' spin with 'hard_lock' (spinless) fallback
-	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Futex, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxFutexFallbackSpinLock;
-	static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Futex, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxFutexFallbackSpinLock;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Futex, true, 5'000'000'000, producingLockName, 6'500'000'000> producingRelaxFutexFallbackSpinLock;
+    static SpinLock<ESpinMethod::CPURelax, ELockSpecializations::Futex, true, 5'000'000'000, consumingLockName, 6'500'000'000> consumingRelaxFutexFallbackSpinLock;
     void (&relaxFutexHardLockFallbackProducer) (unsigned) = lockProducer  <producingRelaxFutexFallbackSpinLock, consumingRelaxFutexFallbackSpinLock>;
     void (&relaxFutexHardLockFallbackConsumer) ()         = lockConsumer  <producingRelaxFutexFallbackSpinLock, consumingRelaxFutexFallbackSpinLock>;
     void (&relaxFutexHardLockFallbackStop)     ()         = lockStop      <producingRelaxFutexFallbackSpinLock, consumingRelaxFutexFallbackSpinLock>;
@@ -746,11 +744,11 @@ int main(void) {
 	PERFORM_MEASUREMENT(1,          relaxRMWLightSpinProducer,         relaxRMWLightSpinConsumer,          relaxRMWLightSpinStop,           relaxRMWLightSpinReset,           relaxRMWLightSpinDebug);
 
 
-*/
+
     static unsigned debugVal;
-	void (&genericDebug)() = debugDeadLock <debugVal, debugVal, false>;
-//    PERFORM_MEASUREMENT(3,          relaxAtomicProducer,          relaxAtomicConsumer,           relaxAtomicStop, reset, genericDebug);
-//    PERFORM_MEASUREMENT(4,           busyAtomicProducer,           busyAtomicConsumer,            busyAtomicStop, reset, genericDebug);
+    void (&genericDebug)() = debugDeadLock <debugVal, debugVal, false>;
+    PERFORM_MEASUREMENT(3,          relaxAtomicProducer,          relaxAtomicConsumer,           relaxAtomicStop, reset, genericDebug);
+    PERFORM_MEASUREMENT(4,           busyAtomicProducer,           busyAtomicConsumer,            busyAtomicStop, reset, genericDebug);
 
     PERFORM_MEASUREMENT(5,  parallelIndependentProducer,  parallelIndependentConsumer,   parallelIndependentStop, reset, genericDebug);
 
