@@ -29,7 +29,7 @@ using namespace MTL::time::TimeMeasurements;
 #define BACK_AND_FORTH (12345)
 
 //#define N_ELEMENTS     (N_THREADS*BATCH)   // should be >= N_THREADS * BATCH
-#define N_ELEMENTS     (26'777'216)   // should be >= N_THREADS * BATCH
+#define N_ELEMENTS     (2*1'048'576)   // should be >= N_THREADS * BATCH
 
 
 // spike vars
@@ -198,8 +198,8 @@ int main(void) {
         }
     };
 
-    auto oneElementQueue = [&](unsigned threads) {
-        for (unsigned i=0; i<N_ELEMENTS/threads; i++) {
+    auto oneElementQueue = [&](unsigned factor) {
+        for (unsigned i=0; i<N_ELEMENTS*factor; i++) {
         	unsigned e;
         	while ((e = freeElements.dequeue()) == -1) {cerr << "feD:i="<<i<</*"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<*/"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
         	//while ((e = freeElements.dequeue()) == -1) ;
@@ -216,7 +216,7 @@ int main(void) {
     //thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
 //    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
 //    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
-    thread threads[] = {thread(oneElementQueue, 4),thread(oneElementQueue, 4),thread(oneElementQueue, 4),thread(oneElementQueue, 4),};
+    thread threads[] = {thread(oneElementQueue, 5),thread(oneElementQueue, 5),thread(oneElementQueue, 5),thread(oneElementQueue, 5),};
     for (thread& t: threads) {
     	cerr << "\n-->joining " << t.get_id() << '\n' << flush;
         t.join();
