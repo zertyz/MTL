@@ -160,12 +160,10 @@ int main(void) {
 
     printHardwareInfo();
  
-    std::cout << "sizeof(QueueSlot) : " << sizeof(QueueSlot) << "\n";
-    std::cout << "sizeof(queue)     : " << sizeof(queue)     << "\n";
+    std::cout << "sizeof(QueueSlot) : " << sizeof(QueueSlot) << "\n" << flush;
+    std::cout << "sizeof(queue)     : " << sizeof(queue)     << "\n" << flush;
 
     populateAllocator();
-
-    //simpleTest<true, true>();
 
     unsigned long long start = getMonotonicRealTimeNS();
 
@@ -200,8 +198,21 @@ int main(void) {
         }
     };
 
+    auto oneElementQueue = [&](unsigned threads) {
+        for (unsigned i=0; i<N_ELEMENTS/threads; i++) {
+        	unsigned e;
+        	while ((e = freeElements.dequeue()) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	queue.enqueue(e);
+        	feD++; qE++;
+        	while ((e = queue.dequeue()) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	freeElements.enqueue(e);
+        	qD++; feE++;
+        }
+    };
+
     //thread threads[] = {thread(_threadFunction),thread(_threadFunction),thread(_threadFunction),thread(_threadFunction),};
-    thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
+    //thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
+    thread threads[] = {thread(oneElementQueue, 4),thread(oneElementQueue, 4),thread(oneElementQueue, 4),thread(oneElementQueue, 4),};
     for (thread& t: threads) {
     	cerr << "\n-->joining " << t.get_id() << '\n' << flush;
         t.join();
@@ -212,6 +223,13 @@ int main(void) {
 //        simpleTest<false, false>();
 //    }
 //    simpleTest<true, true>();
+
+    std::cerr <<  "qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;
+    //queue.dump("queue");
+    std::cerr <<  "'queue': "<<flush<<queue.getLength()<<'\n'<<flush;
+    std::cerr <<  "'freeElements': "<<flush<<freeElements.getLength()<<'\n'<<flush;
+
+
     unsigned count;
     if ((count=       queue.getLength()) != N_ELEMENTS) std::cerr <<  "full 'queue' check failed. count="<<count<<'\n';
     cerr << "\n-->Checking the second..." << '\n' << flush;
@@ -219,7 +237,6 @@ int main(void) {
     cerr << "\n-->all done, I guess..." << '\n' << flush;
 
 
-    std::cerr <<  "'queue': "<<queue.getLength()<<'\n'; std::cerr <<  "'freeElements': "<<freeElements.getLength()<<'\n';std::cerr <<  "qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n';
 
 
     unsigned long long finish = getMonotonicRealTimeNS();

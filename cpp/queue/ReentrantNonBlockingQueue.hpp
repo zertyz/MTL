@@ -71,10 +71,12 @@ namespace MTL::queue {
             AtomicBoundaries currentBoundaries = queueBoundaries.load(memory_order_relaxed);
             AtomicBoundaries newBoundaries;
 
+            backingArray[elementId].next.store(-1, memory_order_release);
+
             do {
 
             	// build 'newBoundaries'
-            	if (currentBoundaries.head == -1) {
+            	if (currentBoundaries.tail == -1) {
                 	// 'EMPTY QUEUE' case:
             		newBoundaries.head = elementId;
             		newBoundaries.tail = elementId;
@@ -90,15 +92,22 @@ namespace MTL::queue {
                 	}
 
             	} else {
-            		// 'non-EMPTY QUEUE' case:
-            		newBoundaries.head = currentBoundaries.head;
+            		if (currentBoundaries.head == -1) {
+                		// 'non-EMPTY QUEUE', desynchronized next case:
+            			newBoundaries.head = currentBoundaries.tail;
+            		} else {
+            			// 'non-EMPTY QUEUE' case:
+            			newBoundaries.head = currentBoundaries.head;
+            		}
             		newBoundaries.tail = elementId;
                 	// apply 'newBoundaries', setting 'tail.next' if it succeeds
                 	if (likely (queueBoundaries.compare_exchange_strong(currentBoundaries, newBoundaries,
                 	                                                    memory_order_relaxed,
                 	                                                    memory_order_relaxed)) ) {
+                		// set the 'next pointer. Keep in mind other thread might be dequeueing this element before this code executes.
+                		// in such case the other thread will see it as -1, eventually leading to the dequeue case 'SINGLE ELEMENT' (with desynchronized 'next')
                 		backingArray[currentBoundaries.tail].next.store(elementId, memory_order_release);
-                		// job done.
+                		// job done
                 		break;
                 	} else {
                         // wait a little before a retry -- preserving CPU resources
@@ -123,11 +132,19 @@ namespace MTL::queue {
 
         		// build 'newBondaries'
         		if (currentBoundaries.head == -1) {
-        			// 'EMPTY QUEUE' case:
-        			slot = nullptr;
-        			return -1;
+        			if (currentBoundaries.tail == -1) {
+						// 'EMPTY QUEUE' case:
+						slot = nullptr;
+						return -1;
+        			} else {
+        				// 'SINGLE ELEMENT' (with desynchronized 'next') case
+        				dequeueCandidate = currentBoundaries.tail;
+                		*slot = &(backingArray[dequeueCandidate]);
+            			newBoundaries.head = -1;
+            			newBoundaries.tail = -1;
+        			}
         		} else if (currentBoundaries.head == currentBoundaries.tail) {
-        			// 'SINGLE ELEMENT' case
+        			// 'SINGLE ELEMENT' (with synchronized 'next') case
         			dequeueCandidate = currentBoundaries.head;
             		*slot = &(backingArray[dequeueCandidate]);
         			newBoundaries.head = -1;
@@ -137,6 +154,9 @@ namespace MTL::queue {
             		dequeueCandidate = currentBoundaries.head;
             		*slot = &(backingArray[dequeueCandidate]);
         			newBoundaries.head = (*slot)->next.load(memory_order_relaxed);
+        			if (newBoundaries.head == -1) {
+        				newBoundaries.head = currentBoundaries.tail;
+        			}
         			newBoundaries.tail = currentBoundaries.tail;
         		}
 
@@ -171,7 +191,7 @@ namespace MTL::queue {
             while (index != -1) {
                 cerr << '['<<index<<"]={next="<<backingArray[index].next.load(memory_order_relaxed)<<",...}; " << flush;
                 count++;
-				index = (index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1;
+				index = (index == -1) ? tail : ((index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1);
             }
             cerr << "\n--> queue '"<<queueName<<"' has "<<count<<" elements\n\n";
         }
@@ -188,7 +208,7 @@ namespace MTL::queue {
             unsigned index = head;
             while (index != -1) {
             	count++;
-				index = (index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1;
+				index = (index == -1) ? tail : ((index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1);
             }
             return count;
         }
