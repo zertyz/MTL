@@ -201,10 +201,10 @@ int main(void) {
     auto oneElementQueue = [&](unsigned threads) {
         for (unsigned i=0; i<N_ELEMENTS/threads; i++) {
         	unsigned e;
-        	while ((e = freeElements.dequeue()) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	while ((e = freeElements.dequeue()) == -1) {cerr << "feD:i="<<i<</*"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<*/"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
         	queue.enqueue(e);
         	feD++; qE++;
-        	while ((e = queue.dequeue()) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	while ((e = queue.dequeue()) == -1) {cerr << "feD:i="<<i<</*"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<*/"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
         	freeElements.enqueue(e);
         	qD++; feE++;
         }

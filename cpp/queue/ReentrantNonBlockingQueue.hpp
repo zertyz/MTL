@@ -100,13 +100,20 @@ namespace MTL::queue {
             			newBoundaries.head = currentBoundaries.head;
             		}
             		newBoundaries.tail = elementId;
+if ( (elementId == currentBoundaries.head) || (elementId == currentBoundaries.tail) ) cerr << "***SAME_ELEMENT_ENQUEUE***"<<flush;
                 	// apply 'newBoundaries', setting 'tail.next' if it succeeds
                 	if (likely (queueBoundaries.compare_exchange_strong(currentBoundaries, newBoundaries,
-                	                                                    memory_order_relaxed,
+                	                                                    memory_order_release,
                 	                                                    memory_order_relaxed)) ) {
                 		// set the 'next pointer. Keep in mind other thread might be dequeueing this element before this code executes.
                 		// in such case the other thread will see it as -1, eventually leading to the dequeue case 'SINGLE ELEMENT' (with desynchronized 'next')
-                		backingArray[currentBoundaries.tail].next.store(elementId, memory_order_release);
+                		unsigned next = backingArray[currentBoundaries.tail].next.load(memory_order_relaxed);
+                		if (next == -1) {
+                			backingArray[currentBoundaries.tail].next.store(elementId, memory_order_release);
+                		} else if (next != elementId) {
+                			backingArray[currentBoundaries.tail].next.store(elementId, memory_order_release);
+//                			cerr << "wft{old_tail={prt="<<currentBoundaries.tail<<",next="<<next<<"};new_tail={ptr="<<elementId<<",next="<<backingArray[elementId].next.load()<<"}!" <<flush;
+                		}
                 		// job done
                 		break;
                 	} else {
@@ -155,8 +162,12 @@ namespace MTL::queue {
             		*slot = &(backingArray[dequeueCandidate]);
         			newBoundaries.head = (*slot)->next.load(memory_order_relaxed);
         			if (newBoundaries.head == -1) {
-        				newBoundaries.head = currentBoundaries.tail;
+        				// pointer is still being set. abort.
+        				slot = nullptr;
+        				return -1;
+        				//newBoundaries.head = currentBoundaries.tail;
         			}
+if ( (newBoundaries.head == dequeueCandidate) ) cerr << "***SAME_ELEMENT_DEQUEUE***"<<flush;
         			newBoundaries.tail = currentBoundaries.tail;
         		}
 
@@ -165,6 +176,7 @@ namespace MTL::queue {
             	                                                    memory_order_release,
             	                                                    memory_order_relaxed)) ) {
             		// job done.
+            		backingArray[dequeueCandidate].next.store(-1, memory_order_release);
             		return dequeueCandidate;
             	} else {
                     // wait a little before a retry -- preserving CPU resources
@@ -187,11 +199,18 @@ namespace MTL::queue {
                     "queueHead="<<head<<"; "
                     "queueTail="<<tail<<"\n" << flush;
             unsigned count=0;
-            unsigned index = head;
+            unsigned index = head == -1 ? tail : head;
+            unsigned maxIndex = index;
             while (index != -1) {
                 cerr << '['<<index<<"]={next="<<backingArray[index].next.load(memory_order_relaxed)<<",...}; " << flush;
                 count++;
-				index = (index == -1) ? tail : ((index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1);
+				index = (index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1;
+				if (index > maxIndex) {
+					maxIndex = index;
+				} else if (index == maxIndex) {
+					cerr << "*** DUMP FAILED: circular reference detected to element " << index << ". Aborting...\n" << flush;
+					return ;
+				}
             }
             cerr << "\n--> queue '"<<queueName<<"' has "<<count<<" elements\n\n";
         }
@@ -205,10 +224,17 @@ namespace MTL::queue {
             unsigned head = currentBoundaries.head;
             unsigned tail = currentBoundaries.tail;
             unsigned count = 0;
-            unsigned index = head;
+            unsigned index = head == -1 ? tail : head;
+            unsigned maxIndex = index;
             while (index != -1) {
             	count++;
-				index = (index == -1) ? tail : ((index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1);
+				index = (index != tail) ? backingArray[index].next.load(memory_order_relaxed) : -1;
+				if (index > maxIndex) {
+					maxIndex = index;
+				} else if (index == maxIndex) {
+					cerr << "*** getLength FAILED: circular reference detected to element " << index << " at count="<<count<<". Aborting...\n" << flush;
+					return -1;
+				}
             }
             return count;
         }
