@@ -29,7 +29,7 @@ using namespace MTL::time::TimeMeasurements;
 #define BACK_AND_FORTH (12345)
 
 //#define N_ELEMENTS     (N_THREADS*BATCH)   // should be >= N_THREADS * BATCH
-#define N_ELEMENTS     (16'777'216)   // should be >= N_THREADS * BATCH
+#define N_ELEMENTS     (26'777'216)   // should be >= N_THREADS * BATCH
 
 
 // spike vars
@@ -111,7 +111,7 @@ void simpleTest() {
     queue.enqueue(freeElements.dequeue());
     queue.enqueue(freeElements.dequeue());
 
-//    if (_check && (!queue.check(count) || count!=4)) std::cerr << "'queue' check failed after enqueueing. count="<<count<<'\n';
+    if (_check && ((count=queue.getLength()) != 4)) std::cerr << "'queue' check failed after enqueueing. count="<<count<<'\n';
 
 
     if constexpr (_debug) queue.dump("with 4 elements...");
@@ -122,8 +122,8 @@ void simpleTest() {
         std::cerr << "dequeued element " << id << std::flush;
         queue.dump("removed element 0...");
     }
-//    if (_check && (!queue.check(count)        || count!=3))            std::cerr <<  "3 elements 'queue' check failed. count="<<count<<'\n';
-//    if (_check && (!freeElements.check(count) || count!=N_ELEMENTS-3)) std::cerr << "-3 elements 'freeElements' check failed. count="<<count<<'\n';
+    if (_check && ((count=queue.getLength()) != 3))                   std::cerr <<  "3 elements 'queue' check failed. count="<<count<<'\n';
+    if (_check && ((count=freeElements.getLength()) != N_ELEMENTS-3)) std::cerr << "-3 elements 'freeElements' check failed. count="<<count<<'\n';
 
 
     freeElements.enqueue(id = queue.dequeue());
@@ -131,8 +131,8 @@ void simpleTest() {
         std::cerr << "dequeued element " << id << std::flush;
         queue.dump("removed elements 0 & 1...");
     }
-//    if (_check && (!queue.check(count)        || count!=2))            std::cerr <<  "2 elements 'queue' check failed. count="<<count<<'\n';
-//    if (_check && (!freeElements.check(count) || count!=N_ELEMENTS-2)) std::cerr << "-2 elements 'freeElements' check failed. count="<<count<<'\n';
+    if (_check && ((count=queue.getLength()) != 2))                   std::cerr <<  "2 elements 'queue' check failed. count="<<count<<'\n';
+    if (_check && ((count=freeElements.getLength()) != N_ELEMENTS-2)) std::cerr << "-2 elements 'freeElements' check failed. count="<<count<<'\n';
 
 
     freeElements.enqueue(id = queue.dequeue());
@@ -140,8 +140,8 @@ void simpleTest() {
         std::cerr << "dequeued element " << id << std::flush;
         queue.dump("removed elements 0, 1 & 2...");
     }
-//    if (_check && (!queue.check(count)        || count!=1))            std::cerr <<  "1 elements 'queue' check failed. count="<<count<<'\n';
-//    if (_check && (!freeElements.check(count) || count!=N_ELEMENTS-1)) std::cerr << "-1 elements 'freeElements' check failed. count="<<count<<'\n';
+    if (_check && ((count=queue.getLength()) != 1))                   std::cerr <<  "1 elements 'queue' check failed. count="<<count<<'\n';
+    if (_check && ((count=freeElements.getLength()) != N_ELEMENTS-1)) std::cerr << "-1 elements 'freeElements' check failed. count="<<count<<'\n';
 
 
     freeElements.enqueue(id = queue.dequeue());
@@ -149,8 +149,8 @@ void simpleTest() {
         std::cerr << "dequeued element " << id <<  std::flush;
         queue.dump("removed elements 0, 1, 2 & 3...");
     }
-//    if (_check && (!queue.check(count)        || count!=0))            std::cerr <<  "0 elements 'queue' check failed. count="<<count<<'\n';
-//    if (_check && (!freeElements.check(count) || count!=N_ELEMENTS-0)) std::cerr << "-0 elements 'freeElements' check failed. count="<<count<<'\n';
+    if (_check && ((count=queue.getLength()) != 0))                 std::cerr <<  "0 elements 'queue' check failed. count="<<count<<'\n';
+    if (_check && ((count=freeElements.getLength()) != N_ELEMENTS)) std::cerr << "-0 elements 'freeElements' check failed. count="<<count<<'\n';
 }
 
 
@@ -165,6 +165,8 @@ int main(void) {
 
     populateAllocator();
 
+    //simpleTest<true, true>();
+
     unsigned long long start = getMonotonicRealTimeNS();
 
     auto _threadFunction = []() {
@@ -173,30 +175,51 @@ int main(void) {
         }
     };
 
-    auto threadFunction = [](unsigned modulus, unsigned val) {
+    atomic<unsigned> qE = 0;
+    atomic<unsigned> qD = 0;
+    atomic<unsigned> feE = 0;
+    atomic<unsigned> feD = 0;
+
+    auto threadFunction = [&](unsigned modulus, unsigned val) {
         for (unsigned i=0; i<N_ELEMENTS; i++) {
-            if (i%modulus == val) {
-                queue.enqueue(freeElements.dequeue());
-                freeElements.enqueue(queue.dequeue());
-                queue.enqueue(freeElements.dequeue());
+            if ((i%modulus) == val) {
+            	unsigned e;
+            	while ((e = freeElements.dequeue()) == -1) {cerr << 'a'<<i<<'\n' << flush; std::cerr <<  "'queue': "<<queue.getLength()<<'\n'; std::cerr <<  "'freeElements': "<<freeElements.getLength()<<'\n';std::cerr <<  "qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n';exit(1);}
+            	feD++;
+                queue.enqueue(e);
+                qE++;
+                while ((e = queue.dequeue()) == -1) cerr << 'b'<<i << flush;
+                qD++;
+                freeElements.enqueue(e);
+                feE++;
+                while ((e = freeElements.dequeue()) == -1) cerr << 'c'<<i << flush;
+                feD++;
+                queue.enqueue(e);
+                qE++;
             }
         }
     };
-    thread threads[] = {thread(_threadFunction)/*,thread(_threadFunction),thread(_threadFunction),thread(_threadFunction),*/};
-    //thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
+
+    //thread threads[] = {thread(_threadFunction),thread(_threadFunction),thread(_threadFunction),thread(_threadFunction),};
+    thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
     for (thread& t: threads) {
+    	cerr << "\n-->joining " << t.get_id() << '\n' << flush;
         t.join();
     }
+    cerr << "\n-->all joined. Checking..." << '\n' << flush;
 
 //    for (unsigned i=0; i<100'000; i++) {
-//        simpleTest<false, true>();
+//        simpleTest<false, false>();
 //    }
 //    simpleTest<true, true>();
     unsigned count;
-    if (!queue.check(count) || count!=N_ELEMENTS) std::cerr <<  "full 'queue' check failed. count="<<count<<'\n';
-    if (!freeElements.check(count) || count!=0) std::cerr <<  "empty 'queue' check failed. count="<<count<<'\n';
+    if ((count=       queue.getLength()) != N_ELEMENTS) std::cerr <<  "full 'queue' check failed. count="<<count<<'\n';
+    cerr << "\n-->Checking the second..." << '\n' << flush;
+    if ((count=freeElements.getLength()) != 0)          std::cerr <<  "empty 'queue' check failed. count="<<count<<'\n';
+    cerr << "\n-->all done, I guess..." << '\n' << flush;
 
 
+    std::cerr <<  "'queue': "<<queue.getLength()<<'\n'; std::cerr <<  "'freeElements': "<<freeElements.getLength()<<'\n';std::cerr <<  "qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n';
 
 
     unsigned long long finish = getMonotonicRealTimeNS();
