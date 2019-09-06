@@ -202,9 +202,11 @@ int main(void) {
         for (unsigned i=0; i<N_ELEMENTS/threads; i++) {
         	unsigned e;
         	while ((e = freeElements.dequeue()) == -1) {cerr << "feD:i="<<i<</*"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<*/"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	//while ((e = freeElements.dequeue()) == -1) ;
         	queue.enqueue(e);
         	feD++; qE++;
         	while ((e = queue.dequeue()) == -1) {cerr << "feD:i="<<i<</*"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<*/"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	//while ((e = queue.dequeue()) == -1) ;
         	freeElements.enqueue(e);
         	qD++; feE++;
         }
@@ -212,11 +214,15 @@ int main(void) {
 
     //thread threads[] = {thread(_threadFunction),thread(_threadFunction),thread(_threadFunction),thread(_threadFunction),};
     //thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
+//    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
+//    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
     thread threads[] = {thread(oneElementQueue, 4),thread(oneElementQueue, 4),thread(oneElementQueue, 4),thread(oneElementQueue, 4),};
     for (thread& t: threads) {
     	cerr << "\n-->joining " << t.get_id() << '\n' << flush;
         t.join();
     }
+//    freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());
+//    freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());freeElements.enqueue(queue.dequeue());
     cerr << "\n-->all joined. Checking..." << '\n' << flush;
 
 //    for (unsigned i=0; i<100'000; i++) {

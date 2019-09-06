@@ -92,28 +92,16 @@ namespace MTL::queue {
                 	}
 
             	} else {
-            		if (currentBoundaries.head == -1) {
-                		// 'non-EMPTY QUEUE', desynchronized next case:
-            			newBoundaries.head = currentBoundaries.tail;
-            		} else {
-            			// 'non-EMPTY QUEUE' case:
-            			newBoundaries.head = currentBoundaries.head;
-            		}
+					// 'non-EMPTY QUEUE' case:
+					newBoundaries.head = currentBoundaries.head;
             		newBoundaries.tail = elementId;
-if ( (elementId == currentBoundaries.head) || (elementId == currentBoundaries.tail) ) cerr << "***SAME_ELEMENT_ENQUEUE***"<<flush;
                 	// apply 'newBoundaries', setting 'tail.next' if it succeeds
                 	if (likely (queueBoundaries.compare_exchange_strong(currentBoundaries, newBoundaries,
-                	                                                    memory_order_release,
+                	                                                    memory_order_relaxed,
                 	                                                    memory_order_relaxed)) ) {
-                		// set the 'next pointer. Keep in mind other thread might be dequeueing this element before this code executes.
-                		// in such case the other thread will see it as -1, eventually leading to the dequeue case 'SINGLE ELEMENT' (with desynchronized 'next')
-                		unsigned next = backingArray[currentBoundaries.tail].next.load(memory_order_relaxed);
-                		if (next == -1) {
-                			backingArray[currentBoundaries.tail].next.store(elementId, memory_order_release);
-                		} else if (next != elementId) {
-                			backingArray[currentBoundaries.tail].next.store(elementId, memory_order_release);
-//                			cerr << "wft{old_tail={prt="<<currentBoundaries.tail<<",next="<<next<<"};new_tail={ptr="<<elementId<<",next="<<backingArray[elementId].next.load()<<"}!" <<flush;
-                		}
+                		// set the 'next' pointer. Keep in mind another thread might be dequeueing this element before this code executes.
+                		// in such case, the other thread will still see it as -1
+            			backingArray[currentBoundaries.tail].next.store(elementId, memory_order_release);
                 		// job done
                 		break;
                 	} else {
@@ -139,17 +127,9 @@ if ( (elementId == currentBoundaries.head) || (elementId == currentBoundaries.ta
 
         		// build 'newBondaries'
         		if (currentBoundaries.head == -1) {
-        			if (currentBoundaries.tail == -1) {
-						// 'EMPTY QUEUE' case:
-						slot = nullptr;
-						return -1;
-        			} else {
-        				// 'SINGLE ELEMENT' (with desynchronized 'next') case
-        				dequeueCandidate = currentBoundaries.tail;
-                		*slot = &(backingArray[dequeueCandidate]);
-            			newBoundaries.head = -1;
-            			newBoundaries.tail = -1;
-        			}
+					// 'EMPTY QUEUE' case:
+					slot = nullptr;
+					return -1;
         		} else if (currentBoundaries.head == currentBoundaries.tail) {
         			// 'SINGLE ELEMENT' (with synchronized 'next') case
         			dequeueCandidate = currentBoundaries.head;
@@ -160,14 +140,14 @@ if ( (elementId == currentBoundaries.head) || (elementId == currentBoundaries.ta
         			// 'MULTIPLE ELEMENT' case
             		dequeueCandidate = currentBoundaries.head;
             		*slot = &(backingArray[dequeueCandidate]);
-        			newBoundaries.head = (*slot)->next.load(memory_order_relaxed);
-        			if (newBoundaries.head == -1) {
-        				// pointer is still being set. abort.
-        				slot = nullptr;
-        				return -1;
-        				//newBoundaries.head = currentBoundaries.tail;
+            		unsigned observedNext = (*slot)->next.load(memory_order_relaxed);
+        			if (observedNext == -1) {
+        				// pointer is still being set in another 'enqueue' operation. spin until it is ready for dequeueing.
+        				do {
+        					cpu_relax();
+        				} while ( (observedNext = (*slot)->next.load(memory_order_relaxed)) == -1 );
         			}
-if ( (newBoundaries.head == dequeueCandidate) ) cerr << "***SAME_ELEMENT_DEQUEUE***"<<flush;
+        			newBoundaries.head = observedNext;
         			newBoundaries.tail = currentBoundaries.tail;
         		}
 
@@ -176,7 +156,6 @@ if ( (newBoundaries.head == dequeueCandidate) ) cerr << "***SAME_ELEMENT_DEQUEUE
             	                                                    memory_order_release,
             	                                                    memory_order_relaxed)) ) {
             		// job done.
-            		backingArray[dequeueCandidate].next.store(-1, memory_order_release);
             		return dequeueCandidate;
             	} else {
                     // wait a little before a retry -- preserving CPU resources
