@@ -206,16 +206,16 @@ int main(void) {
         QueueSlot* slot;
         for (unsigned i=0; i<N_ELEMENTS*factor; i++) {
         	unsigned e;
-        	while ((e = freeElements.dequeue(&slot)) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
-        	//while ((e = freeElements.dequeue()) == -1) ;
+        	//while ((e = freeElements.dequeue(&slot)) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	while ((e = freeElements.dequeue(&slot)) == -1) cpu_relax();
             feD++;
             slot->taskId = 20;    // 10-19: element belongs to 'freeElements'; 20-29: belongs to 'queue'
             slot->nSqrt  = count++;
             slot->n      = slot->taskId + e;
         	queue.enqueue(e);
         	qE++;
-        	while ((e = queue.dequeue()) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
-        	//while ((e = queue.dequeue()) == -1) ;
+        	//while ((e = queue.dequeue()) == -1) {cerr << "*feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	while ((e = queue.dequeue(&slot)) == -1) cpu_relax();
             qD++;
             slot->taskId = 20;    // 10-19: element belongs to 'freeElements'; 20-29: belongs to 'queue'
             slot->nSqrt  = count++;
