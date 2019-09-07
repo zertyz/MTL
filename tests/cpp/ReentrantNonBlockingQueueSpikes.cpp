@@ -29,7 +29,7 @@ using namespace MTL::time::TimeMeasurements;
 #define BACK_AND_FORTH (12345)
 
 //#define N_ELEMENTS     (N_THREADS*BATCH)   // should be >= N_THREADS * BATCH
-#define N_ELEMENTS     (2*1'048'576)   // should be >= N_THREADS * BATCH
+#define N_ELEMENTS     (8*2*1'048'576)   // should be >= N_THREADS * BATCH
 
 
 // spike vars
@@ -54,6 +54,9 @@ void populateAllocator() {
     for (unsigned i=0; i<N_ELEMENTS; i++) {
 //        backingArray[i].prev = -1;
 //        backingArray[i].next = -1;
+        backingArray[i].taskId = 10;     // 10-19: element belongs to 'freeElements'; 20-29: belongs to 'queue'
+        backingArray[i].nSqrt  = i;
+        backingArray[i].n      = 10+i;
         freeElements.enqueue(i);
     }
 }
@@ -199,16 +202,80 @@ int main(void) {
     };
 
     auto oneElementQueue = [&](unsigned factor) {
+        unsigned count = 0;
+        QueueSlot* slot;
         for (unsigned i=0; i<N_ELEMENTS*factor; i++) {
         	unsigned e;
-        	while ((e = freeElements.dequeue()) == -1) {cerr << "feD:i="<<i<</*"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<*/"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	while ((e = freeElements.dequeue(&slot)) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
         	//while ((e = freeElements.dequeue()) == -1) ;
+            feD++;
+            slot->taskId = 20;    // 10-19: element belongs to 'freeElements'; 20-29: belongs to 'queue'
+            slot->nSqrt  = count++;
+            slot->n      = slot->taskId + e;
         	queue.enqueue(e);
-        	feD++; qE++;
-        	while ((e = queue.dequeue()) == -1) {cerr << "feD:i="<<i<</*"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<*/"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
+        	qE++;
+        	while ((e = queue.dequeue()) == -1) {cerr << "feD:i="<<i<<"; 'queue': "<<queue.getLength()<<"; 'freeElements': "<<freeElements.getLength()<<"; qE="<<qE<<",qD="<<qD<<",feE="<<feE<<",feD="<<feD<<'\n'<<flush;/*exit(1);*/}
         	//while ((e = queue.dequeue()) == -1) ;
+            qD++;
+            slot->taskId = 20;    // 10-19: element belongs to 'freeElements'; 20-29: belongs to 'queue'
+            slot->nSqrt  = count++;
+            slot->n      = slot->taskId + e;
         	freeElements.enqueue(e);
-        	qD++; feE++;
+        	feE++;
+        }
+    };
+
+    auto deFree = [&](unsigned threads, unsigned n) {
+        unsigned count = 0;
+        unsigned max = -1;
+        for (unsigned i=n; i<N_ELEMENTS; i+=threads) {
+            unsigned e;
+            QueueSlot* slot;
+            if ( (e = freeElements.dequeue(&slot)) == -1) {
+                cerr << "### out of elements while dequeueing from 'freeElements' at i="<<i<<"\n";
+                break;
+            }
+            feD++;
+            // assertions
+            if (slot->taskId >= 20)          { cerr << "### wrong 'taskId' in deFree"; break;}
+            if (threads == 1) {
+                if (slot->nSqrt == max)          { cerr << "### element "<<max<<" detected twice in deFree";}
+                if ( (slot->nSqrt > max) || (max == -1) ) max = slot->nSqrt;
+            }
+            if (slot->n != (slot->taskId+e)) { cerr << "### wrong 'n' in deFree"; break;}
+            // set new element
+            slot->taskId = 20+threads;    // 10-19: element belongs to 'freeElements'; 20-29: belongs to 'queue'
+            slot->nSqrt  = count++;
+            slot->n      = slot->taskId + e;
+            queue.enqueue(e);
+            qE++;
+        }
+    };
+
+    auto deQueue = [&](unsigned threads, unsigned n) {
+        unsigned count = 0;
+        unsigned max = -1;
+        for (unsigned i=n; i<N_ELEMENTS; i+=threads) {
+            unsigned e;
+            QueueSlot* slot;
+            if ( (e = queue.dequeue(&slot)) == -1) {
+                cerr << "### out of elements while dequeueing from 'queue' at i="<<i<<"\n";
+                break;
+            }
+            qD++;
+            // assertions
+            if (slot->taskId < 20)           { cerr << "### wrong 'taskId' in deQueue"; break;}
+            if (threads == 1) {
+                if (slot->nSqrt == max)          { cerr << "### element "<<max<<" detected twice in deQueue";}
+                if ( (slot->nSqrt > max) || (max == -1) ) max = slot->nSqrt;
+            }
+            if (slot->n != (slot->taskId+e)) { cerr << "### wrong 'n' in deQueue"; break;}
+            // set new element
+            slot->taskId = 10+threads;    // 10-19: element belongs to 'freeElements'; 20-29: belongs to 'queue'
+            slot->nSqrt  = count++;
+            slot->n      = slot->taskId + e;
+            freeElements.enqueue(e);
+            feE++;
         }
     };
 
@@ -216,7 +283,8 @@ int main(void) {
     //thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
 //    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
 //    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
-    thread threads[] = {thread(oneElementQueue, 5),thread(oneElementQueue, 5),thread(oneElementQueue, 5),thread(oneElementQueue, 5),};
+    thread threads[] = {thread(oneElementQueue, 1),thread(oneElementQueue, 1),thread(oneElementQueue, 1),thread(oneElementQueue, 1),};
+//    thread threads[] = {thread([&]{deFree(4,0);deQueue(4,0);deFree(4,0);}),thread([&]{deFree(4,1);deQueue(4,1);deFree(4,1);}),thread([&]{deFree(4,2);deQueue(4,2);deFree(4,2);}),thread([&]{deFree(4,3);deQueue(4,3);deFree(4,3);}),};
     for (thread& t: threads) {
     	cerr << "\n-->joining " << t.get_id() << '\n' << flush;
         t.join();
