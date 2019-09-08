@@ -283,8 +283,8 @@ int main(void) {
     //thread threads[] = {thread(threadFunction, 4,0),thread(threadFunction, 4,1),thread(threadFunction, 4,2),thread(threadFunction, 4,3),};
 //    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
 //    queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());queue.enqueue(freeElements.dequeue());
-    thread threads[] = {thread(oneElementQueue, 1),thread(oneElementQueue, 1),thread(oneElementQueue, 1),thread(oneElementQueue, 1),};
-//    thread threads[] = {thread([&]{deFree(4,0);deQueue(4,0);deFree(4,0);}),thread([&]{deFree(4,1);deQueue(4,1);deFree(4,1);}),thread([&]{deFree(4,2);deQueue(4,2);deFree(4,2);}),thread([&]{deFree(4,3);deQueue(4,3);deFree(4,3);}),};
+//    thread threads[] = {thread(oneElementQueue, 1),thread(oneElementQueue, 1),thread(oneElementQueue, 1),thread(oneElementQueue, 1),};
+    thread threads[] = {thread([&]{deFree(4,0);deQueue(4,0);deFree(4,0);}),thread([&]{deFree(4,1);deQueue(4,1);deFree(4,1);}),thread([&]{deFree(4,2);deQueue(4,2);deFree(4,2);}),thread([&]{deFree(4,3);deQueue(4,3);deFree(4,3);}),};
     for (thread& t: threads) {
     	cerr << "\n-->joining " << t.get_id() << '\n' << flush;
         t.join();

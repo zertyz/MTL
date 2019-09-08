@@ -85,10 +85,11 @@ namespace MTL::queue {
         inline void enqueue(unsigned elementId) {
 
             backingArray[elementId].next.store(-1, memory_order_relaxed);
+
             // advance TAIL
             unsigned currentTail = queue.tail.exchange(elementId, memory_order_release);
-            // set 'next' pointer from old tail
             if (currentTail != -1) {
+                // set 'next' pointer from old tail, linking this enqueued element to the existing list
                 backingArray[currentTail].next.store(elementId, memory_order_release);
                 // if there was a HEAD (old tail was not -1), the work is done.
                 return ;
@@ -99,22 +100,10 @@ namespace MTL::queue {
                 // create the first element of the list -- a new list happens whenever HEAD is 'null'
                 // the new HEAD is, therefore, the first element of the new list: 'elementId'
 
-                unsigned newHead = elementId;
-
-                // set HEAD to TAIL if HEAD is null -- so 'dequeue' is able to proceed
-                Queue currentQueue = {(unsigned)-1, elementId}; // if nothing is happening in parallel, this is the exact value of atomicQueue.load(memory_order_relaxed);
-                Queue newQueue;
-                do {
-/*
-                    if (currentQueue.head != -1) {
-                        cerr << "*** Unexpected HEAD IS NO LONGER NULL ERROR!!" << flush;
-                        break;
-                    }*/
-                    newQueue.head = elementId;
-                    newQueue.tail = currentQueue.tail;  // tail might have changed if another enqueueing is happening in another thread
-                } while (unlikely (!atomicQueue.compare_exchange_weak(currentQueue, newQueue,
-                                                                      memory_order_release,
-                                                                      memory_order_relaxed)) );
+                unsigned currentHead = queue.head.exchange(elementId, memory_order_release);
+/*                if (unlikely (currentHead != -1) ) {
+                    cerr << "*** Unexpected HEAD IS NO LONGER NULL ERROR!! QUEUE is corrupted!" << flush;
+                }*/
             }
         }
 
@@ -148,7 +137,8 @@ namespace MTL::queue {
                     }
                 } else {
                     // 'MULTIPLE ELEMENT' case
-                    if ( unlikely ( (newQueue.head = backingArray[currentQueue.head].next.load(memory_order_relaxed)) == -1 ) ) {
+                    (*slot) = &(backingArray[currentQueue.head]);
+                    if ( unlikely ( (newQueue.head = (*slot)->next.load(memory_order_relaxed)) == -1 ) ) {
                         // if 'next' is -1, it is still being enqueued by another thread. reload and try again...
                         currentQueue = atomicQueue.load(memory_order_relaxed);
                         continue;
@@ -158,7 +148,6 @@ namespace MTL::queue {
                                                                    memory_order_release,
                                                                    memory_order_relaxed)) ) {
                         // head advanced, meaning 'currentQueue.head' is the element to dequeue
-                        (*slot) = &(backingArray[currentQueue.head]);
                         return currentQueue.head;
                     } else {
                         // some other thread already dequeued our candidate. lets repeat it all over
