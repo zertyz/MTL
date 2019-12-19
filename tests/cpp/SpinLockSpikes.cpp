@@ -444,7 +444,7 @@ void performMeasurement(unsigned strategyNumber,
     //constexpr bool DEBUG_DEADLOCKS = false;                                                // debug disabled even if possible
 
     std::cout << "\n\nStaring the STRATEGY #" << strategyNumber << " measurements: '" << producerFunctionName << "' / '" << consumerFunctionName << "':\n";
-    std::cout << "\tnTest; nProducers; nConsumers;    nEvents   -->   (  tEvent;         tTotal  ):\n" << std::flush;
+    std::cout << "\tnTest; nProducers; nConsumers;     nEvents   -->   (  tEvent;         tTotal    ):\n" << std::flush;
     for (unsigned nTest=0; nTest<N_TESTS_PER_STRATEGY; nTest++) {
         unsigned nProducers = N_PRODUCERS_CONSUMERS[nTest][0];
         unsigned nConsumers = N_PRODUCERS_CONSUMERS[nTest][1];
@@ -461,7 +461,7 @@ void performMeasurement(unsigned strategyNumber,
                   PAD(nTest,      5)  << "; " <<
                   PAD(nProducers, 10) << "; " <<
                   PAD(nConsumers, 10) << "; " <<
-                  PAD(nEvents,    10) << "   -->   " << std::flush;
+                  PAD(nEvents,    11) << "   -->   " << std::flush;
 
         // start the consumers
         for (unsigned threadNumber=0; threadNumber<nConsumers; threadNumber++) {
@@ -491,7 +491,7 @@ void performMeasurement(unsigned strategyNumber,
         unsigned tEvent = elapsed / nEvents;    // ns per event
         std::cout << "(" <<
                      PAD(tEvent, 6)   << "ns; " <<
-                     PAD(elapsed, 14) << "ns)\033[K" <<     // here, "\033[K" erases 'til the end of the line (clean debug info)
+                     PAD(elapsed, 16) << "ns)\033[K" <<     // here, "\033[K" erases 'til the end of the line (clean debug info)
                      (nTest < N_TESTS_PER_STRATEGY-1 ? ",\n":".\n") << std::flush;
 
         // record measurement
@@ -541,7 +541,7 @@ void performMeasurement(unsigned strategyNumber,
         double bias;
         double exponentiality = getExponentiality(averageEventDurations, 4, bias);
         std::cout << "\t\tExponentiality among 'nProducers' when nConsumers = " << PAD(nConsumers, 2) << ":  "
-                  << exponentiality << "; bias:" << bias << "\n";
+                  << exponentiality << "; bias: " << bias << "\n";
     }
     for(unsigned nProducers : valuesForConsumerAndProducers) {
         unsigned long long averageEventDurations[4];
@@ -549,14 +549,14 @@ void performMeasurement(unsigned strategyNumber,
         double bias;
         double exponentiality = getExponentiality(averageEventDurations, 4, bias);
         std::cout << "\t\tExponentiality among 'nConsumers' when nProducers = " << PAD(nProducers, 2) << ":  "
-                  << exponentiality << "; bias:" << bias << "\n";
+                  << exponentiality << "; bias: " << bias << "\n";
     }
     unsigned long long averageEventDurations[4];
     getTimesForProducersAndConsumers(-1, -1, averageEventDurations);
     double bias;
     double exponentiality = getExponentiality(averageEventDurations, 4, bias);
-    std::cout << "\t\tExponentiality among total threads (2, 4, 8, 32): "
-                << exponentiality << "; bias:" << bias << "\n";
+    std::cout << "\t\tExponentiality among total threads (2, 4, 8, 32):        "
+                << exponentiality << "; bias: " << bias << "\n";
 
 }
 
