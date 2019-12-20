@@ -32,7 +32,7 @@ namespace MTL::time::TimeMeasurements {
       * so, in order to get the elapsed nano seconds, use:
       *     ELAPSED_TIME_SECONDS = (CYCLE_COUNT * CPU_MAX_FREQUENCY) / (1/10^9)
       * NOTES:
-      *     - In theory, sub nano second measurement is possible;
+      *     - In theory, sub nano second measurements are possible;
       *     - On x86, if your CPU has the 'constant_tsc' feature, the measurement is reliable
       *       among cores as well as it is reliable even when the CPU scales up or down
       *       (maybe the actual CPU_MAX_FREQUENCY is greater than advertised by the CPU
