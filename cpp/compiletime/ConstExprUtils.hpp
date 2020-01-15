@@ -1,16 +1,19 @@
-#ifndef MUTUA_CPPUTILS_CONSTEXPRUTILS_H
-#define MUTUA_CPPUTILS_CONSTEXPRUTILS_H
+#ifndef MTL_COMPILETIME_ConstExprUtils_hpp
+#define MTL_COMPILETIME_ConstExprUtils_hpp
 
 #include <sstream>
 
-namespace mutua::cpputils {
+namespace mtl::compiletime {
 
 	/** <pre>
-	 * ConstExprUtils.h
-	 * ================
+	 * ConstExprUtils.hpp
+	 * ==================
 	 * created by luiz, Dec 12, 2018
 	 *
-	 * Functions that returns their values in compile-time.
+	 * Some possibly-useful functions that returns their values in compile-time.
+	 *
+	 * Functionalities:
+	 *   1) Random numbers, arrays & strings
 	 *
 	 * The code here were taken/inspired from:
 	 *   - https://mklimenko.github.io/english/2018/06/04/constexpr-random/
@@ -68,7 +71,7 @@ namespace mutua::cpputils {
 		 *  constexpr array<string_view, 1024'000>               constexprRandomStringArray = Mutua::CppUtils::ConstExprUtils::generateStringArrayFromCharArray<1024'000, 17>(constexprRandom2DCharArray); */
 		template <unsigned _1DArrayLength, unsigned _2DArrayLength>
 		constexpr static std::array<std::array<char, _2DArrayLength>, _1DArrayLength> generateRandomChar2DArray(char min, char max) {
-			std::array<std::array<char, _2DArrayLength>, _1DArrayLength> array{0};
+			std::array<std::array<char, _2DArrayLength>, _1DArrayLength> array{''};
 			std::uint32_t previous = getSeed();
 			for (auto &charArrayElement : array) {
 				unsigned i = 0;
@@ -97,4 +100,4 @@ namespace mutua::cpputils {
 	};
 
 }
-#endif //MUTUA_CPPUTILS_CONSTEXPRUTILS_H
+#endif //MTL_COMPILETIME_ConstExprUtils_hpp

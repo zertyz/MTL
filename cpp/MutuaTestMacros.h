@@ -1,12 +1,16 @@
-#ifndef MUTUA_TESTUTILS_MUTUATESTMACROS_H_
-#define MUTUA_TESTUTILS_MUTUATESTMACROS_H_
+#ifndef MTL_MUTUATESTMACROS_H_
+#define MTL_MUTUATESTMACROS_H_
 
 /** <pre>
  * MutuaTestMacros.h
  * =================
  * created by luiz, Oct 24, 2018
  *
- * Macros ease Unit Tests with Boost Test Framework.
+ * Macros to ease Unit Tests & Spikes.
+ *
+ * Functionalities:
+ *   1) Allocation tracking
+ *   2) Progress reporting functions with console codes
  *
 */
 
@@ -57,4 +61,4 @@ void operator delete(void* alloc_entry) noexcept {
 
 #endif // NO_HEAP_TRACE
 
-#endif /* MUTUA_TESTUTILS_MUTUATESTMACROS_H_ */
+#endif /* MTL_MUTUATESTMACROS_H_ */
