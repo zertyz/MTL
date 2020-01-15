@@ -4,6 +4,8 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include "../compiletime/HostInfo.h"
+
 /**
  * TimeMeasurements.hpp
  * ====================
@@ -33,6 +35,7 @@ namespace MTL::time::TimeMeasurements {
       *     ELAPSED_TIME_SECONDS = (CYCLE_COUNT * CPU_MAX_FREQUENCY) / (1/10^9)
       * NOTES:
       *     - In theory, sub nano second measurements are possible;
+      *     - There is a limit for the elapsed time (ARM uses a 32bit int, for instance, but may tick once every 64 cycles)
       *     - On x86, if your CPU has the 'constant_tsc' feature, the measurement is reliable
       *       among cores as well as it is reliable even when the CPU scales up or down
       *       (maybe the actual CPU_MAX_FREQUENCY is greater than advertised by the CPU
@@ -51,11 +54,12 @@ using namespace MTL::time;
 
 static inline unsigned TimeMeasurements::armClockInit() {
 
-	#if __arm__
+	#if MTL_CPU_INSTR_ARMv7 || MTL_CPU_INSTR_ARMv8
 
-		// this code will be executed if we are in an ARM computer.
-		// it's execution is guranteed by the initialization of the
-		// static variable '_armClockInit'
+    // this code is needed to initialize both Raspberry Pi 2 & Raspberry Pi 3 before any measurements
+    // can be made. It's execution is guranteed by the initialization of the static variable '_armClockInit'.
+    // Apart from that, both rPi2 & rPi3 need to load a kernel module to execute a code that enable user space
+    // processes to read the measurement registers -- see kernel/arm/enable_ccr.c
 
 		// in general enable all counters (including cycle counter)
 		int32_t value = 1;
@@ -84,6 +88,8 @@ static inline unsigned TimeMeasurements::armClockInit() {
 		return 42;	// can be any number...
 
 	#else
+    // x86 & Raspberry Pi 1 does not need any per-process initialization code
+    // Raspberry Pi 1 still needs to execute code in kernel space once per boot
 		return 0;
 	#endif
 }
@@ -97,15 +103,18 @@ static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
         return ((uint64_t)hi << 32) | lo;
 
 
-    // arm
-    #elif __arm__
+    // Raspberry Pi 2 & 3
+    #elif MTL_CPU_INSTR_ARMv7 || MTL_CPU_INSTR_ARMv8
         unsigned int value;
         // Read CCNT Register
         asm volatile ("MRC p15, 0, %0, c9, c13, 0\t\n": "=r"(value));  
         return value;
 
-        // for this to work on arm, one should build and insmod a kernel module
-        // https://matthewarcus.wordpress.com/2018/01/27/using-the-cycle-counter-registers-on-the-raspberry-pi-3/
+    // Raspberry Pi 1
+    #elif MTL_CPU_INSTR_ARMv6
+        unsigned cc;
+        asm volatile ("mrc p15, 0, %0, c15, c12, 1" : "=r" (cc));
+        return cc;
     #else
 
         #error Unknown Processor
