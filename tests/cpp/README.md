@@ -65,3 +65,6 @@ Method 2: every save will compile and run the program on an already opened termi
 ...
 ...
 ```
+
+for code in FutexAdapterSpikes.cpp ReentrantNonBlockingQueueSpikes.cpp SpinLockSpikes.cpp UnorderedArrayBasedReentrantStackSpikes.cpp CppUtilsSpikes.cpp; do for compiler in g++ clang++; do echo -en "`date`: Compiling $code with $compiler..."; $compiler -std=c++17 -O3 -march=native -mcpu=native -mtune=native -mfloat-abi=hard -mfpu=vfp -I../../external/EABase/include/Common/ -pthread -latomic $code -o ${code}.$compiler && echo " OK"; done; done
+

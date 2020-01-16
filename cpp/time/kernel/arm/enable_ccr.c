@@ -28,7 +28,6 @@ void enable_ccr(void *info) {
       // code taken from https://blog.regehr.org/archives/794
 
       asm volatile ("mcr p15,  0, %0, c15,  c9, 0\n" : : "r" (1)); 
-      return 0;
 
     #else
 
