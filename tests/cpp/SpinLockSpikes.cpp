@@ -77,6 +77,7 @@ bool& nonAtomicStopConsumers     = reinterpret_cast<bool&>     (stopConsumers);
 
 #include <EABase/config/eacompiler.h>
 #include <EABase/config/eaplatform.h>
+#include "../../cpp/compiletime/HostInfo.h"
 void printInfo() {
 
     std::cout << "Compile-time Info:\n"
@@ -84,6 +85,13 @@ void printInfo() {
                  "\tOS                 :  " EA_PLATFORM_NAME "\n"
                  "\tPlatform           :  " EA_PLATFORM_DESCRIPTION "\n"
                  "\tEA_CACHE_LINE_SIZE :  " << EA_CACHE_LINE_SIZE << "\n" << std::flush
+    ;
+
+    std::cout << "Compile-time Info:\n"
+                 "\tCompiler & Version  :  " MTL_COMPILER " " MTL_COMPILER_VERSION "\n"
+                 "\tOS                  :  " MTL_OS "\n"
+                 "\tCPU instruction set :  " MTL_CPU_INSTR "\n"
+                 "\tCache line size     :  " MTL_CACHE_LINE "\n" << std::flush
     ;
 
 }
