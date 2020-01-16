@@ -54,6 +54,14 @@ using namespace MTL::time;
 
 static inline unsigned TimeMeasurements::armClockInit() {
 
+#ifdef MTL_OS_FreeBSD
+
+	// we on FreeBSD (x86_64 or Raspberry Pi) -- do nothing
+	// these will not work for Raspberry Pi on FreeBSD -- the needed kernel modules are not yet available for FreeBSD
+	return 0;
+
+#else
+
 	#if MTL_CPU_INSTR_ARMv7 || MTL_CPU_INSTR_ARMv8
 
     // this code is needed to initialize both Raspberry Pi 2 & Raspberry Pi 3 before any measurements
@@ -92,6 +100,8 @@ static inline unsigned TimeMeasurements::armClockInit() {
     // Raspberry Pi 1 still needs to execute code in kernel space once per boot
 		return 0;
 	#endif
+
+#endif		// MTL_OS_FreeBSD
 }
 
 static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
@@ -105,20 +115,29 @@ static inline uint64_t TimeMeasurements::getProcessorCycleCount() {
 
     // Raspberry Pi 2 & 3
     #elif MTL_CPU_INSTR_ARMv7 || MTL_CPU_INSTR_ARMv8
+    #ifdef MTL_OS_FreeBSD
+	// on FreeBSD, a fallback method is used, since the needed kernel modules are not available for that platform yet
+	return TimeMeasurements::getMonotonicRealTimeMS();
+    #else // Linux
         unsigned int value;
         // Read CCNT Register
         asm volatile ("MRC p15, 0, %0, c9, c13, 0\t\n": "=r"(value));  
         return value;
+    #endif	// MTL_OS_FreeBSD
 
     // Raspberry Pi 1
     #elif MTL_CPU_INSTR_ARMv6
+    #ifdef MTL_OS_FreeBSD
+	// on FreeBSD, a fallback method is used, since the needed kernel modules are not available for that platform yet
+	return TimeMeasurements::getMonotonicRealTimeMS();
+    #else // Linux
         unsigned cc;
         asm volatile ("mrc p15, 0, %0, c15, c12, 1" : "=r" (cc));
         return cc;
+    #endif	// MTL_OS_FreeBSD
+
     #else
-
-        #error Unknown Processor
-
+        #error Unknown Processor for getProcessorCycleCount() method
     #endif
 }
 
