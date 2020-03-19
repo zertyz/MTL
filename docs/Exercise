@@ -1,0 +1,147 @@
+Considerando uma Arquitetura Orientada a Eventos baseada em um modelo de eventos contendo:
+	- Produtores: geram Notificações com informações sobre a ocorrência de Eventos previamente definidos;
+	- Consumidores: responsáveis por processar as notificações de tais eventos, causando um efeito colateral e/ou emitindo uma resposta opcional;
+	- Observadores: optam (ou não) por receber tanto as informações de notificação dos eventos quanto das respostas emitidas, dadas pelos consumidores de tais eventos...
+
+Idealize um Servidor Web, dividido nos seguintes microsserviços:
+	- ConnectionServer          -- O Servidor de conexões;
+	- HTTPProtocolHandler       -- O processador do protocolo HTTP (para conexões na porta 80);
+	- HTTPSProtocolHandler      -- O processador do protocolo HTTPS (para conexões na porta 443);
+	- StaticContentProvider     -- O provedor de conteúdos oriundos de arquivos estáticos;
+	- DynamicContentProvider    -- O provedor de conteúdos oriundos da execução de Aplicações;
+	- LogWritter                -- Responsável por armazenar os logs de acesso ou erro a cada um dos recursos estáticos e dinâmicos fornecidos pelo nosso Servidor Web;
+	- WebApplication1           -- Uma aplicação WEB dinamica preparada para responder a requests GET;
+	- WebApplication2           -- Uma aplicação WEB dinâmica preparada para responder a requests GET, POST e WebSocket;
+	- DoSSecurityGuardian       -- Embora seus algoritmos fujam ao escopo do exercício, é o responsável por alertar e, quem sabe, tomar providências sobre possíveis ataques de negação de serviço;
+	- DynamicContentSLAGuardian -- Executa uma ação (de registro, notificação ou qualquer outra, fora do escopo do nosso exercício) sempre que uma das aplicações WEB descumprir os SLA referentes a: "Tempo Máximo de Resposta" e "Sempre gerar uma resposta válida (sem erros)";
+
+	e
+
+	- (OPCIONAL, valendo pontos extras): GETCachingEngine -- Quando habilitado, provê funcionalidades de cache para conteúdos dinâmicos que respondem a requests GET. As aplicações têm que se registrar informando, por exemplo, quais PATHS estão sujeitos ao cache, qual(is) parâmetro(s) funcionam como ID para cada entrada de cache, o tempo de expiração e a estratégia de cache: LAZY ou EAGER -- significando, respectivamente: em caso de cache expirada, só carregar o recurso na próxima solicitação e, em caso de cache expirada, recarregar o recurso imediatamente. Lembrando que os detalhes do algoritmo de cache (se é feito apenas em memória ou também armazenado em disco e, especialmente, quanta memória estará disponível para a função) fogem ao escopo do exercício.
+
+Lembre que, por definição, cada um dos microsserviços é desacoplado em relação a todos os outros -- eles somente podem se comunicar por eventos. Considere que um determinado conjunto de eventos opere dentro de um 'EventContainer'. Todos os microsserviços definem um 'EventContainer' default (estático), mas outros podem ser criados. Exemplo: o servidor de conexões cria um event container ao escutar em uma nova porta, mas o pedido para que ele ouça em outras portas é feito através dos eventos presentes em seu 'EventContainer' default.
+
+Questões:
+	a) segundo a sua visão, escreva o propósito (ou a razão para a existência) de cada um dos microsserviços citados;
+	b) indique, para cada microsserviço citado, quais seriam os possíveis eventos que cada um deles gera, consome e/ou observa. Se julgar apropriado, novos microsserviços podem ser sugeridos e podem valer pontos extras se possibilitarem mais simplicidade e/ou flexibilidade no código final;
+	c) para cada evento citado acima, defina o modelo de dados das notificações de ocorrência e das respostas, se houver;
+	d) quais seriam as consequências, de acordo com sua solução, caso o servidor web em questão operasse (ou tentasse operar) sem cada um dos microsserviços citados;
+	e) OPCIONAL, valendo pontos extras: diga como você faria para determinar quantas threads deveriam ser atribuidas a cada microsserviço, com o objetivo de aumentar o número de requisições por segundo servidas, de modo a utilizar de maneira mais eficiente os recursos oferecidos pelo hardware (Redija esta questão considerando que seus argumentos serão apresentados ao time de infra-estrutura, responsável por avaliar e executar, se adotados, seus estudos e argumentos);
+	f) OPCIONAL, valendo pontos extras: faça uma breve dissertação sobre um servidor web baseado em microsserviços, levantando vantagens e desvantagens, e considerando cenários em que ele rodaria em apenas uma máquina ou, caso haja muita carga, seja distrubuído em várias máquinas... e diga se você realmente optaria pela construção de um servidor web com arquitetura de microsserviços em cada um desses cenários -- levando em conta possíveis tradeoffs entre latência, troughput e escalabilidade.
+
+
+RESPOSTAS:
+
+a) - ConnectionServer:  existe para lidar diretamente com as APIs do sistema referentes às conexões cliente/servidor e de ser o elo de comunicação entre os clientes e o resto dos microsserviços aqui descritos;
+   - HTTPProtocolHandler: faz o elo entre as conexões (ConnectionServer) e o conteúdo (providos por StaticContentProvider e DynamicContentProvider) -- permitindo atender a clientes conversando em protocolo HTTP plain (sem criptografia);
+   - HTTPSProtocolHandler: idem a HTTPProtocolHandler, porém atende a clientes desejando conversar em HTTP por um canal seguro (criptografado);
+   - StaticContentProvider: existe para atender a requisições de HTTPProtocolHandler ou HTTPSProtocolHandler por conteúdo estático, presente no filesystem;
+   - DynamicContentProvider: idem a StaticContentProvider, porém faz elo quantos microsserviços existirem do tipo 'WebApplication' para prover conteúdo dinâmico;
+   - LogWriter: fornece duas funcionalidades: gera logs HTTP (dos requests, erros, etc) bem como logs dos microsserviços internos e das aplicações externas
+   - WebApplication: classe de microserviços cuja responsabilidade é implementar lógicas de negócio e aplicações externas ao nosso servidor http, processando eventos de DynamicContentProvider e fornecendo respostas com o conteúdo citado, gerados por tais aplicações;
+   - DoSSecurityGuardian: se liga a ConnectionServer e observa padrões de comunicação dos clientes, gerando eventos de volta a ConnectionServer para incluir IPs em blacklists, ao mesmo tempo em que gera entradas em LOG para alarmar monitoradores humanos;
+   - DynamicContentSLAGuardian: uma vez conhecendo os compromissos de SLA de cada aplicação (emitidos através de eventos lançados por cada aplicação no momento de sua inicialização), gera entradas em LOG para alarmer monitoradores humanos sempre que tais compromissos forem descumpridos, a saber: "Tempo Máximo entre Request / Response", "Nunca Extrapolar Exceptions não processadas", ... todos "por path", aceitando regular expressions.
+
+b) - ConnectionServer:
+     Default EventContainer:
+       CS_GET_BINDING {port}, responde com {ports[], EventsContainer} -- informa, para a porta requisitada, qual é o 'EventsContainer' onde ocorrem os eventos e quais outras portas (na verdade incluindo a porta requisitada também) atuam sobre o mesmo 'EventsContainer' -- útil para 'DoSSecurityGuardian' saber quais 'EventsContainer's deve observar;
+       emite CS_BINDING_OCCURRED {ports[], EventsContainer} (resposta de CS_BIND) (similar a ouvir a resposta de CS_BIND?)
+       CS_BIND {ports[]}, responde {EventsContainer} -- passa a escutar na(s) porta(s) informadas e retorna um novo 'EventsContainer' para gerar/ouvir eventos lidando com o resto das comunicações específicas para a(s) porta(s) passada(s):
+     Eventos Produzidos nos containers específicos para cada bind: CS_CONNECTION_OPENED, CS_INCOMING_DATA, CS_CONNECTION_CLOSED, CS_CONNECTION_TIMEOUT, CS_READ_TIMEOUT, CS_WRITE_TIMEOUT
+     Eventos Consumidos também pelos containers dos binds: CS_OUTGOING_DATA, CS_FORCE_CLOSE
+     Modelagem dos dados de notificação, assumindo que:
+        ConnectionId: Um número que se refere ao handler de conexão do sistema (que não deve ser passada diretamente aos consumidores para garantir o desacoplamento)
+     ConnectionStatistics: uma séria de informações sobre a conexão (bytes trafegados tx e rx, ip cliente, time abertura, time last tx/rx, state)
+     CS_CONNECTION_OPENED: {ConnectionId, time} -- indica que uma conexão foi feita (originada pelo cliente) e está pronta para trafegar dados
+     CS_INCOMING_DATA    : {ConnectionId, time, buffer} -- indica que o cliente enviou dados
+     CS_CONNECTION_CLOSED: {ConnectionId, time, reason}
+     CS_*_TIMEOUT        : {ConnectionId, connectionStatistics}
+     CS_OUTGOING_DATA    : {ConnectionId, buffer} -- indica que o servidor deve enviar dados ao cliente
+     CS_FORCE_CLOSE      : {ConnectionId, reason} -- Instrui que servidor deve fechar a conexão
+
+   - HTTPProtocolHandler:
+     Envia evento CS_BIND {port=80} ao ConnectionServer e recebe a resposta com o 'EventsContainer' a escutar/enviar seus eventos.
+     Consome os seguintes eventos de 'ConnectionServer' (já especificados):
+       CS_CONNECTION_OPENED -- Ao receber este evento, guarda o ID da conexão em suas estruturas internas -- incluindo o "estado" do protocolo (recebendo headers, recebendo content, encerrado)
+       CS_INCOMING_DATA     -- Recebe dados que serão processados de acordo com o estado do protocolo HTTP com aquele cliente. Ex: enquanto estiver "recebendo headers", armazenamos internamente; se "recebendo content" (que só é válido para métodos POST e paths com aplicações web dinâmicas), reencaminhamos o evento para a aplicação pertinente
+       CS_CONNECTION_CLOSED -- Ao receber este evento, remove o ID da conexão de suas estruturas internas, liberando memória
+       CS_*_TIMEOUT         -- Idem
+     Produz os seguintes eventos para 'ConnectionServer' (já especificados):
+       CS_OUTGOING_DATA     -- Usado para se enviar algum resultado referente ao HTTP ou sobre conteúdo produzido por agente externo
+     Consome os seguintes eventos (próprios) no 'EventsContainer' estático (default), especificados como se segue:
+       HTTP_REGISTER_PATH_SUBTREE {path, virtualHosts[]}, responde {EventsContainer} -- fornece um 'EventsContainer' capaz de servir conteúdo
+     Consome os seguintes eventos (próprios) em cada 'EventsContainer' retornado por 'HTTP_REGISTER_PATH_SUBTREE', especificados como se segue:
+       HTTP_HEAD_REQUEST    : {ConnectionId, Path} (nota: a resposta vem através do evento 'HTTP_OUTGOING_HEADERS' abaixo)
+       HTTP_GET_REQUEST     : idem -- e a resposta vem do 'HTTP_OUTGOING_HEADERS' e 'HTTP_OUTGOING_DATA'
+       HTTP_POST_REQUEST    :
+       HTTP_PUT_REQUEST     :
+       HTTP_DELETE_REQUEST  :
+       HTTP_*_REQUEST       : mapeando todos os requests HTTP possíveis
+       HTTP_OUTGOING_DATA -- análogo ao CS_OUTGOING_DATA, que não pode ser reaproveitado pois o client HTTP deve adicionar headers antes do primeiro retorno
+       HTTP_OUTGOING_HEADERS -- opcional. Se existente, deve vir antes de qualquer HTTP_OUTGOING_DATA. Instrui o HTTP server a adicionar esses dados aos headers que ele já enviaria
+     Produz os seguintes eventos (próprios) em cada 'EventsContainer' retornado por 'HTTP_REGISTER_PATH_SUBTREE', especificados como se segue:
+       HTTP_INCOMING_HEADERS: análogo a CS_INCOMING_DATA, que não pode ser reaproveitado pois parte dos HEADERS e do conteúdo do POST poderiam vir num mesmo CS_INCOMING_DATA (emitido pelo ConnectionServer)
+       HTTP_INCOMING_DATA -- análogo ao CS_INCOMING_DATA, que não pode ser reaproveitado pelas mesmas razões expostas acima
+     Produz os seguintes eventos (tanto no container específico -- onde exige consumidor -- quanto no container default, que só aceita listeners):
+       HTTP_404_NOT_FOUND: {ConnectionId, Path, Method(get,post,etc), Headers}, consumidores respondem com {content(pode ser null, p/ resposta default)}
+
+   - StaticContentProvider:
+     Uma vez que leu de seu arquivo de configuração qual(is) é(são) o(s) diretório(s) pertinente(s), registra, emite 'HTTP_REGISTER_PATH_SUBTREE' p/ cada arquivo e diretório lá encontrado no primeiro nível. No 'EventsContainer' dado como resposta, consome:
+       HTTP_INCOMING_DATA: não só é ignorado, mas emite 'HTTP_OUTGOING_HEADERS' contendo erro de protocolo
+       HTTP_HEAD_REQUEST : gera 'HTTP_OUTGOING_HEADERS' com dados do arquivo, se houver, ou com erro 404
+       HTTP_GET_REQUEST  : idem
+       HTTP_POST_REQUEST : emite 'HTTP_OUTGOING_HEADERS' enunciando o erro de protocolo (não pode haver POST para arquivos estáticos)
+       ...
+
+   - DynamicContentProvider:
+     Consome, em seu 'EventsContainer' estático, os seguintes eventos:
+       DYN_REGISTER_APP: {pathSubTree, Protocols[] (http/https)} -- registra infos e repassa requisição p/ HTTP_/HTTPS_REGISTER_PATH_SUBTREE
+     Daí pra frente, funciona apenas como um PIPE entre os microsserviços HTTP(S) e WebApplication*
+
+   - LogWritter:
+     Observa eventos: HTTP{S}_{HEAD,GET,POST,PUT,DELETE}_REQUEST, HTTP_INCOMING_HEADERS, HTTP_OUTGOING_HEADERS para gerar os logs HTTP
+
+
+------------------------------------------------------------------------------------------------------
+
+Programação orientada a eventos (Visão):
+	1) Modelagem Producer / Listener / Consumer -- asynchronous
+	2) RMI/RPC/RFC -- Remote Method Invocation / Remote Procedure Call / Remote Function Call -- pode vir uma answer
+	--> No caso de um evento cabendo uma answer, consumidores podem responder... listeners, nunca.
+	--> Listeners pode optar por escutar o evento (request), no momento de sua emissão OU o evento (request+response), após a respota estar pronta
+
+Jargão:
+	(modelo de eventos: diagrama. evidenciar que consumidores são listeners especiais: apenas 1 dos consumidores é notificado).
+	(entidades, vindo do record -- EventProcessor, EventChannels...).
+
+Funcionalidades:
+	- deadlock reporter -- se habilitado, threads atualizam um timestamp a cada iteração e uma thread "watchdog" observa estes tempos, chama uma callback com infos sobre threads & eventos & notificações que, por ventura, estourarem o tempo de resposta.
+
+Consequências:
+	- como cada evento pode ser Listened por vários interessados, seus recursos de memória só podem ser liberados após todos os Listeners terem terminado seus serviços (e, claro, apenas 1 dos Consumers também). Se houver ao menos 1 Listener mal elaborado / mal intencionado, todo o processo (o processo do sistema operacional) pode ser comprometido. Os "payloads" de 'debug' e 'metrics' a seguir, contudo, podem ajudar a evidenciar esta situação:
+
+Modelo:
+    Events:
+        adições ao "payload" answerless:
+                se optando por 'debug': {producerId, consumerId} (os Ids vêm das infos de debug da fila)
+                se optando por 'metrics': {producerReservationTime, producerPublicationTime, consumerStartTime, consumerEndTime, listeningStartTime, listeningEndTime, slowerListenerElapsedTime, slowerListenerAddr}
+                mínimo "payload" para operar: {wasConsumed, wasListened}
+        para "payloads" answerful, adicionar:
+                se optando por 'debug': {}
+                se optando por 'metrics': {answerRequestedTime, answerProcessedTime}
+                mínimo "payload" para operar: {wasAnswerProcessed}
+    Filas:
+        se optando por 'debug': {nProducers, producerThreads[], producerAddrs[(é possível??)], nConsumers, consumerThreads[], consumerAddrs[], nListeners, listenerThreads[], listenerAddrs[]}
+        se optando por 'metrics': {TotalTimeEmpty, TotalTimeFull, emptyCount, fullCount, eventsProducedCount, eventsCounsumedCount, eventsListenedCount, averageElementsWhenProducing, maxElements}
+
+Algo
+  (descentralizado -- adicionar / remover threads pode ser feito a qualquer tempo)
+    -- além do aparente benefício, isso permite, creio, uma menor latência, já que não é preciso sincronizar threads
+  (totalmente configurável: qual thread processa qual(is) consumers e qual(is) ou quantos listeners)
+	:
+
+Pool Allocators:
+	Um bom pool allocator é um stack (o último a ser liberado, ainda fresco nos caches, será o primeiro a ser reciclado). Ao se considerar um allocator convencional, uma chamada para alocação (stack.pop) e uma chamada para liberação (stack.push) são suficientes. Porém, para permitir que eventos sejam notificados em diferentes canais, um alocator especial pode ser implementado para instanciações do tipo PoolAllocator<N> onde N > 1. Neste caso, o algoritmo de liberação usa um int (int8, int16, ou qualquer int capaz de contar até N-1) para manter a contagem de quantos frees (stack.push) são necessários para efetivamente liberar o slot para reuso. Esta especialização visa simplificar caso os dois destinos dos eventos sejam gerenciados por ¿EventProcessors? (verificar nome) diferentes -- se os dois (ou mais) EventChannels envolvidos forem gerenciados pelo mesmo EventProcessor, não seria necessário dar 2 frees?
+	
+--
+ PASSPHRASE="lastPictureOfTheDay"; cat txt.txt | gpg --passphrase "${PASSPHRASE}" --batch --quiet --yes --no-use-agent -z 9 -a -c |  grep -v ' PGP MESSAGE' | tr '\n' ' ' | cat | tr ' ' '\n' | (echo '-----BEGIN PGP MESSAGE-----'; cat; echo '-----END PGP MESSAGE-----') | gpg --passphrase "$PASSPHRASE" --batch --quiet --yes --no-use-agent -d | vim -
